@@ -124,65 +124,73 @@ def wait_for_login(page: Page, status: UploadStatus, timeout: int = 300) -> bool
     return False
 
 
+def _log_page_links(page: Page, status: UploadStatus):
+    """ページ上のリンクとボタンをステータスに記録（デバッグ用）。"""
+    try:
+        items = []
+        for el in page.locator("a[href], button").all()[:30]:
+            text = (el.text_content() or "").strip()
+            href = el.get_attribute("href") or ""
+            tag = el.evaluate("e => e.tagName")
+            if text and len(text) < 50:
+                items.append(f"[{tag}] {text} → {href}" if href else f"[{tag}] {text}")
+        if items:
+            status.update("デバッグ", "ページ要素: " + " | ".join(items[:15]))
+    except Exception:
+        pass
+
+
 def navigate_to_new_sticker(page: Page, status: UploadStatus) -> bool:
     """スタンプ新規作成ページに遷移する。"""
-    status.update("ページ遷移", "スタンプ新規作成ページに移動中...", 25)
+    status.update("ページ遷移", "マイページに移動中...", 25)
 
-    # 方法1: 直接URLにアクセス
-    # LINE Creators Market のスタンプ新規作成ページのURLパターンを試行
-    candidate_urls = [
-        "https://creator.line.me/ja/sticker/new/",
-        "https://creator.line.me/ja/mypage/sticker/new/",
-        "https://creator.line.me/ja/mypage/#/sticker/new",
-    ]
-
-    for url in candidate_urls:
-        try:
-            page.goto(url, timeout=15000)
-            page.wait_for_load_state("networkidle", timeout=10000)
-            time.sleep(2)
-
-            # スタンプ作成フォームらしき要素があるか確認
-            if page.locator("input[type='text'], textarea, input[type='file']").count() > 0:
-                status.update("ページ遷移", f"スタンプ作成ページに到着。({url})", 35)
-                return True
-        except Exception:
-            continue
-
-    # 方法2: マイページから「新規登録」ボタンを探してクリック
-    status.update("ページ遷移", "マイページから新規登録ボタンを探しています...", 28)
+    # まずマイページに移動
     page.goto(MYPAGE_URL, timeout=15000)
-    page.wait_for_load_state("networkidle", timeout=10000)
+    page.wait_for_load_state("networkidle", timeout=15000)
     time.sleep(3)
 
-    # 「新規登録」系のリンク・ボタンを探す
+    current_url = page.url
+    status.update("ページ遷移", f"現在のURL: {current_url}", 27)
+
+    # マイページのリンク・ボタンを記録
+    _log_page_links(page, status)
+
+    # 「新規登録」系のリンク・ボタンを探してクリック
     new_btn_selectors = [
         "a:has-text('新規登録')",
         "a:has-text('新規作成')",
+        "a:has-text('新しく作る')",
         "button:has-text('新規登録')",
         "button:has-text('新規作成')",
         "a:has-text('Create New')",
         "a:has-text('New Submission')",
-        "[class*='new'], [class*='create']",
+        "a:has-text('新規')",
+        "button:has-text('新規')",
     ]
 
+    clicked_new = False
     for sel in new_btn_selectors:
         try:
             btn = page.locator(sel).first
             if btn.is_visible(timeout=2000):
-                status.update("ページ遷移", f"「新規登録」ボタンをクリック ({sel})", 30)
+                status.update("ページ遷移", f"ボタンをクリック: {btn.text_content().strip()}", 30)
                 btn.click()
                 time.sleep(3)
+                page.wait_for_load_state("networkidle", timeout=10000)
+                clicked_new = True
                 break
         except Exception:
             continue
 
-    # 「スタンプ」を選択（タイプ選択画面が表示される場合）
+    if clicked_new:
+        status.update("ページ遷移", f"クリック後のURL: {page.url}", 32)
+        _log_page_links(page, status)
+
+    # スタンプタイプ選択画面が出た場合
     sticker_selectors = [
         "a:has-text('スタンプ')",
         "button:has-text('スタンプ')",
         "a:has-text('Sticker')",
-        "[class*='sticker']",
         "a[href*='sticker']",
     ]
 
@@ -190,39 +198,27 @@ def navigate_to_new_sticker(page: Page, status: UploadStatus) -> bool:
         try:
             el = page.locator(sel).first
             if el.is_visible(timeout=2000):
-                status.update("ページ遷移", f"「スタンプ」を選択 ({sel})", 33)
+                status.update("ページ遷移", f"「スタンプ」を選択: {el.text_content().strip()}", 33)
                 el.click()
                 time.sleep(3)
+                page.wait_for_load_state("networkidle", timeout=10000)
                 break
         except Exception:
             continue
 
-    # フォーム要素があれば成功
-    page.wait_for_load_state("networkidle", timeout=10000)
     time.sleep(2)
+    current_url = page.url
+    status.update("ページ遷移", f"最終URL: {current_url}", 35)
 
-    if page.locator("input[type='text'], textarea, input[type='file']").count() > 0:
-        status.update("ページ遷移", "スタンプ作成ページに到着。", 35)
+    # フォーム要素があれば成功
+    form_count = page.locator("input[type='text'], textarea, input[type='file'], select").count()
+    if form_count > 0:
+        status.update("ページ遷移", f"スタンプ作成ページに到着（フォーム要素: {form_count}個）", 35)
         return True
 
-    # ページの現在のURLとスクリーンショットを記録
-    current_url = page.url
-    status.update("ページ遷移", f"フォームが見つかりません。現在のURL: {current_url}", 30)
-
-    # ページ上のリンクとボタンを全て記録して、手がかりを残す
-    try:
-        links = page.locator("a[href]").all()
-        link_texts = []
-        for link in links[:30]:
-            text = link.text_content() or ""
-            href = link.get_attribute("href") or ""
-            if text.strip():
-                link_texts.append(f"{text.strip()} → {href}")
-        if link_texts:
-            status.update("デバッグ", "ページ上のリンク: " + " | ".join(link_texts[:10]))
-    except Exception:
-        pass
-
+    # フォームが見つからない場合、ページ内容を記録
+    _log_page_links(page, status)
+    status.update("ページ遷移", "フォームが見つかりません。ページ要素をログに記録しました。", 30)
     return False
 
 
