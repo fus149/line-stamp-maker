@@ -134,6 +134,38 @@ async def download_zip(session_id: str):
     )
 
 
+@app.post("/api/upload-to-line/{session_id}")
+async def upload_to_line_api(
+    session_id: str,
+    title: str = Form("ペットスタンプ"),
+    description: str = Form("かわいいペットのスタンプです"),
+):
+    """Playwrightでブラウザを開き、LINE Creators Marketに自動登録する。"""
+    output_dir = SESSIONS_DIR / session_id / "output"
+    if not output_dir.exists():
+        return JSONResponse({"error": "セッションが見つかりません"}, status_code=404)
+
+    stamp_files = sorted(output_dir.glob("[0-9][0-9].png"))
+    if not stamp_files:
+        return JSONResponse({"error": "スタンプ画像が見つかりません"}, status_code=404)
+
+    # Playwrightを別スレッドで実行（ブラウザが開く）
+    import threading
+    from scripts.upload_to_line import upload_to_line
+
+    thread = threading.Thread(
+        target=upload_to_line,
+        args=(output_dir, title, description),
+        daemon=True,
+    )
+    thread.start()
+
+    return {
+        "status": "started",
+        "message": "ブラウザが開きます。LINEアカウントでログインしてください。",
+    }
+
+
 @app.delete("/api/session/{session_id}")
 async def cleanup_session(session_id: str):
     session_dir = SESSIONS_DIR / session_id

@@ -65,10 +65,16 @@ function initUpload() {
   });
 }
 
-function addFiles(fileList) {
+function isHeic(file) {
+  const name = file.name.toLowerCase();
+  return name.endsWith(".heic") || name.endsWith(".heif") || file.type === "image/heic" || file.type === "image/heif";
+}
+
+async function addFiles(fileList) {
   for (const file of fileList) {
     if (state.files.length >= 8) break;
-    if (!file.type.startsWith("image/")) continue;
+    // HEIC/HEIF はtypeが空のことがあるので拡張子でもチェック
+    if (!file.type.startsWith("image/") && !isHeic(file)) continue;
     state.files.push(file);
   }
   renderPreviewGrid();
@@ -81,6 +87,19 @@ function removeFile(index) {
   updateCounter();
 }
 
+async function createThumbnailUrl(file) {
+  // HEIC/HEIFはブラウザで表示できないのでJPEGに変換
+  if (isHeic(file) && typeof heic2any !== "undefined") {
+    try {
+      const blob = await heic2any({ blob: file, toType: "image/jpeg", quality: 0.7 });
+      return URL.createObjectURL(blob);
+    } catch (e) {
+      console.warn("HEIC変換失敗:", e);
+    }
+  }
+  return URL.createObjectURL(file);
+}
+
 function renderPreviewGrid() {
   const grid = $("#preview-grid");
   grid.innerHTML = "";
@@ -90,7 +109,23 @@ function renderPreviewGrid() {
     div.className = "preview-item";
 
     const img = document.createElement("img");
-    img.src = URL.createObjectURL(file);
+    // まずプレースホルダーを表示
+    img.alt = file.name;
+
+    // 非同期でサムネイルを生成
+    createThumbnailUrl(file).then((url) => {
+      img.src = url;
+    });
+
+    // 読み込み失敗時はファイル名を表示
+    img.onerror = () => {
+      div.classList.add("preview-fallback");
+      img.style.display = "none";
+      const label = document.createElement("span");
+      label.className = "fallback-label";
+      label.textContent = file.name.slice(0, 12);
+      div.appendChild(label);
+    };
 
     const num = document.createElement("span");
     num.className = "preview-num";
@@ -310,10 +345,49 @@ function resetApp() {
   goToStep(1);
 }
 
+// --- LINE Creators Market Upload ---
+function initLineUpload() {
+  $("#btn-upload-line").addEventListener("click", () => {
+    $("#line-upload-form").hidden = false;
+    $("#btn-upload-line").hidden = true;
+  });
+
+  $("#btn-cancel-upload").addEventListener("click", () => {
+    $("#line-upload-form").hidden = true;
+    $("#btn-upload-line").hidden = false;
+  });
+
+  $("#btn-start-upload").addEventListener("click", async () => {
+    const title = $("#stamp-title").value.trim() || "ペットスタンプ";
+    const desc = $("#stamp-desc").value.trim() || "かわいいペットのスタンプです";
+
+    $("#line-upload-form").hidden = true;
+    $("#line-uploading").hidden = false;
+
+    const formData = new FormData();
+    formData.append("title", title);
+    formData.append("description", desc);
+
+    try {
+      const res = await fetch(`/api/upload-to-line/${state.sessionId}`, {
+        method: "POST",
+        body: formData,
+      });
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.error);
+    } catch (e) {
+      alert("エラー: " + e.message);
+      $("#line-uploading").hidden = true;
+      $("#btn-upload-line").hidden = false;
+    }
+  });
+}
+
 // --- Init ---
 document.addEventListener("DOMContentLoaded", () => {
   initUpload();
   initModeSelection();
+  initLineUpload();
 
   $("#btn-restart").addEventListener("click", resetApp);
   $("#btn-retry").addEventListener("click", resetApp);

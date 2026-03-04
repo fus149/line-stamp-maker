@@ -248,6 +248,21 @@ a:hover { text-decoration: underline; }
   justify-content: center;
 }
 
+.preview-item.preview-fallback {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: var(--green-light);
+}
+
+.fallback-label {
+  font-size: 0.65rem;
+  color: var(--text-sub);
+  text-align: center;
+  word-break: break-all;
+  padding: 0.3rem;
+}
+
 /* --- Counter --- */
 .counter {
   text-align: center;
@@ -442,6 +457,45 @@ a:hover { text-decoration: underline; }
   object-fit: contain;
   /* チェック柄の背景で透過を表現 */
   background: repeating-conic-gradient(#f0f0f0 0% 25%, #fff 0% 50%) 0 0 / 16px 16px;
+}
+
+.actions-col {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 0.6rem;
+  margin-top: 1.5rem;
+}
+
+.btn-line {
+  background: #06C755;
+  color: #fff;
+  font-weight: 700;
+}
+
+.btn-line:hover {
+  background: #05a648;
+}
+
+.upload-form {
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-lg);
+  padding: 1.2rem;
+  margin-top: 1rem;
+}
+
+.line-upload-status {
+  text-align: center;
+  padding: 1.5rem;
+  background: var(--green-light);
+  border-radius: var(--radius-lg);
+  margin-top: 1rem;
+}
+
+.line-upload-status p {
+  font-weight: 600;
+  color: var(--green-dark);
 }
 
 .result-hint {

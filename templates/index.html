@@ -5,6 +5,7 @@
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
   <title>LINEスタンプ自動でつくるくん</title>
   <link rel="stylesheet" href="/static/css/style.css" />
+  <script src="https://cdn.jsdelivr.net/npm/heic2any@0.0.4/dist/heic2any.min.js"></script>
 </head>
 <body>
   <div class="app">
@@ -142,17 +143,41 @@
 
           <div class="result-grid" id="result-grid"></div>
 
-          <div class="actions">
+          <div class="actions-col">
+            <button class="btn btn-line btn-lg" id="btn-upload-line">
+              LINE Creators Market に自動登録
+            </button>
             <a class="btn btn-primary btn-lg" id="btn-download" href="#" download>
               ZIPをダウンロード 📦
             </a>
           </div>
 
-          <p class="result-hint">
-            ダウンロードしたZIPを
-            <a href="https://creator.line.me/" target="_blank" rel="noopener">LINE Creators Market</a>
-            にアップロードしてください
-          </p>
+          <!-- LINE自動登録フォーム -->
+          <div id="line-upload-form" class="upload-form" hidden>
+            <h3 class="detail-title">スタンプ情報を入力</h3>
+            <div class="input-list">
+              <div class="input-row">
+                <span class="input-num">1</span>
+                <input type="text" id="stamp-title" class="msg-input" value="ペットスタンプ" placeholder="スタンプタイトル" />
+              </div>
+              <div class="input-row">
+                <span class="input-num">2</span>
+                <input type="text" id="stamp-desc" class="msg-input" value="かわいいペットのスタンプです" placeholder="スタンプの説明" />
+              </div>
+            </div>
+            <div class="actions" style="margin-top: 1rem;">
+              <button class="btn btn-ghost" id="btn-cancel-upload">キャンセル</button>
+              <button class="btn btn-line" id="btn-start-upload">ブラウザを開いて登録開始</button>
+            </div>
+          </div>
+
+          <!-- LINE登録中 -->
+          <div id="line-uploading" hidden>
+            <div class="line-upload-status">
+              <p>ブラウザが開きました。LINEアカウントでログインしてください。</p>
+              <p class="panel-desc">ログイン後、スタンプ登録が自動で進みます。</p>
+            </div>
+          </div>
 
           <div class="actions" style="margin-top: 1rem;">
             <button class="btn btn-ghost" id="btn-restart">もう一度作る</button>

@@ -12,7 +12,11 @@ from typing import List, Optional, Tuple
 
 import numpy as np
 from PIL import Image, ImageDraw, ImageEnhance, ImageFont, ExifTags
+from pillow_heif import register_heif_opener
 from rembg import remove
+
+# HEIC/HEIF形式をPillowで読めるように登録
+register_heif_opener()
 
 STAMP_WIDTH = 370
 STAMP_HEIGHT = 320

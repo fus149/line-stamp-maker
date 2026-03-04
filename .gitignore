@@ -1,5 +1,6 @@
 input_images/
 output/
+sessions/
 .env
 
 # Python
