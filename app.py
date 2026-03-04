@@ -149,6 +149,9 @@ async def upload_to_line_api(
     if not stamp_files:
         return JSONResponse({"error": "スタンプ画像が見つかりません"}, status_code=404)
 
+    # ステータスファイルのパスを設定
+    status_file = SESSIONS_DIR / session_id / "upload_status.json"
+
     # Playwrightを別スレッドで実行（ブラウザが開く）
     import threading
     from scripts.upload_to_line import upload_to_line
@@ -156,6 +159,7 @@ async def upload_to_line_api(
     thread = threading.Thread(
         target=upload_to_line,
         args=(output_dir, title, description),
+        kwargs={"interactive": False, "status_file": status_file},
         daemon=True,
     )
     thread.start()
@@ -163,7 +167,23 @@ async def upload_to_line_api(
     return {
         "status": "started",
         "message": "ブラウザが開きます。LINEアカウントでログインしてください。",
+        "session_id": session_id,
     }
+
+
+@app.get("/api/upload-status/{session_id}")
+async def get_upload_status(session_id: str):
+    """LINE自動登録の進捗を返す。"""
+    status_file = SESSIONS_DIR / session_id / "upload_status.json"
+    if not status_file.exists():
+        return {"step": "待機中", "message": "処理を開始しています...", "progress": 0}
+
+    import json as json_module
+    try:
+        data = json_module.loads(status_file.read_text(encoding="utf-8"))
+        return data
+    except Exception:
+        return {"step": "待機中", "message": "ステータスを取得中...", "progress": 0}
 
 
 @app.delete("/api/session/{session_id}")

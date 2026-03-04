@@ -375,12 +375,47 @@ function initLineUpload() {
       });
       const data = await res.json();
       if (!res.ok) throw new Error(data.error);
+
+      // ステータスポーリング開始
+      startStatusPolling();
     } catch (e) {
       alert("エラー: " + e.message);
       $("#line-uploading").hidden = true;
       $("#btn-upload-line").hidden = false;
     }
   });
+}
+
+// --- LINE Upload Status Polling ---
+let statusPollTimer = null;
+
+function startStatusPolling() {
+  if (statusPollTimer) clearInterval(statusPollTimer);
+
+  statusPollTimer = setInterval(async () => {
+    try {
+      const res = await fetch(`/api/upload-status/${state.sessionId}`);
+      const data = await res.json();
+
+      const statusEl = $("#line-upload-status-text");
+      if (statusEl) {
+        statusEl.textContent = `[${data.step}] ${data.message}`;
+      }
+
+      const progressEl = $("#line-upload-progress");
+      if (progressEl) {
+        progressEl.style.width = (data.progress || 0) + "%";
+      }
+
+      // 完了またはエラーでポーリング停止
+      if (data.step === "完了" || data.step === "エラー" || data.step === "中断") {
+        clearInterval(statusPollTimer);
+        statusPollTimer = null;
+      }
+    } catch (e) {
+      // ネットワークエラーは無視して次のポーリングを待つ
+    }
+  }, 2000);
 }
 
 // --- Init ---
