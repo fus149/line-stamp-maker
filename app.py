@@ -10,8 +10,10 @@ import shutil
 import uuid
 from pathlib import Path
 
+import io
+
 from fastapi import FastAPI, File, Form, UploadFile
-from fastapi.responses import FileResponse, JSONResponse
+from fastapi.responses import FileResponse, JSONResponse, Response
 from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
 from starlette.requests import Request
@@ -44,6 +46,27 @@ async def index(request: Request):
 @app.get("/api/templates")
 async def get_templates():
     return {"templates": load_templates()}
+
+
+@app.post("/api/preview-image")
+async def preview_image(file: UploadFile = File(...)):
+    """画像をJPEGサムネイルに変換して返す（HEIC対応）。"""
+    import pillow_heif
+    pillow_heif.register_heif_opener()
+    from PIL import Image
+
+    content = await file.read()
+    try:
+        img = Image.open(io.BytesIO(content))
+        img.thumbnail((200, 200))
+        if img.mode in ("RGBA", "P"):
+            img = img.convert("RGB")
+        buf = io.BytesIO()
+        img.save(buf, format="JPEG", quality=75)
+        buf.seek(0)
+        return Response(content=buf.getvalue(), media_type="image/jpeg")
+    except Exception:
+        return JSONResponse({"error": "変換失敗"}, status_code=400)
 
 
 @app.post("/api/upload")

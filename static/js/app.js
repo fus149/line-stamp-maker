@@ -88,15 +88,19 @@ function removeFile(index) {
 }
 
 async function createThumbnailUrl(file) {
-  // HEIC/HEIFはブラウザで表示できないのでJPEGに変換
-  if (isHeic(file) && typeof heic2any !== "undefined") {
-    try {
-      const blob = await heic2any({ blob: file, toType: "image/jpeg", quality: 0.7 });
+  // サーバー側でJPEGサムネイルに変換（HEIC/HEIF含む全形式対応）
+  try {
+    const formData = new FormData();
+    formData.append("file", file);
+    const res = await fetch("/api/preview-image", { method: "POST", body: formData });
+    if (res.ok) {
+      const blob = await res.blob();
       return URL.createObjectURL(blob);
-    } catch (e) {
-      console.warn("HEIC変換失敗:", e);
     }
+  } catch (e) {
+    console.warn("サーバー変換失敗:", e);
   }
+  // フォールバック: ブラウザで直接表示を試みる
   return URL.createObjectURL(file);
 }
 
