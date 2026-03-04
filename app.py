@@ -209,6 +209,25 @@ async def get_upload_status(session_id: str):
         return {"step": "待機中", "message": "ステータスを取得中...", "progress": 0}
 
 
+@app.get("/api/debug-screenshots/{session_id}")
+async def list_debug_screenshots(session_id: str):
+    """デバッグスクリーンショットの一覧を返す。"""
+    debug_dir = SESSIONS_DIR / session_id / "output" / "debug"
+    if not debug_dir.exists():
+        return {"screenshots": []}
+    files = sorted(f.name for f in debug_dir.glob("*.png"))
+    return {"screenshots": files}
+
+
+@app.get("/api/debug-screenshots/{session_id}/{filename}")
+async def get_debug_screenshot(session_id: str, filename: str):
+    """デバッグスクリーンショットを返す。"""
+    path = SESSIONS_DIR / session_id / "output" / "debug" / filename
+    if not path.exists():
+        return JSONResponse({"error": "not found"}, status_code=404)
+    return FileResponse(path, media_type="image/png")
+
+
 @app.delete("/api/session/{session_id}")
 async def cleanup_session(session_id: str):
     session_dir = SESSIONS_DIR / session_id

@@ -411,15 +411,48 @@ function startStatusPolling() {
         progressEl.style.width = (data.progress || 0) + "%";
       }
 
-      // 完了またはエラーでポーリング停止
+      // ログ全文を表示
+      const logsEl = $("#line-upload-logs");
+      if (logsEl && data.logs && data.logs.length > 0) {
+        logsEl.textContent = data.logs.join("\n");
+        logsEl.scrollTop = logsEl.scrollHeight;
+      }
+
+      // 完了またはエラーでポーリング停止 & デバッグスクリーンショット取得
       if (data.step === "完了" || data.step === "エラー" || data.step === "中断") {
         clearInterval(statusPollTimer);
         statusPollTimer = null;
+        loadDebugScreenshots();
       }
     } catch (e) {
       // ネットワークエラーは無視して次のポーリングを待つ
     }
   }, 2000);
+}
+
+async function loadDebugScreenshots() {
+  try {
+    const res = await fetch(`/api/debug-screenshots/${state.sessionId}`);
+    const data = await res.json();
+    const container = $("#debug-screenshots");
+    if (!container || !data.screenshots || data.screenshots.length === 0) return;
+    container.hidden = false;
+    const grid = container.querySelector(".debug-grid") || container;
+    grid.innerHTML = "";
+    for (const name of data.screenshots) {
+      const img = document.createElement("img");
+      img.src = `/api/debug-screenshots/${state.sessionId}/${name}`;
+      img.alt = name;
+      img.title = name;
+      img.style.maxWidth = "300px";
+      img.style.border = "1px solid #ccc";
+      img.style.borderRadius = "8px";
+      img.style.margin = "4px";
+      grid.appendChild(img);
+    }
+  } catch (e) {
+    // ignore
+  }
 }
 
 // --- Init ---

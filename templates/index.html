@@ -5,7 +5,6 @@
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
   <title>LINEスタンプ自動でつくるくん</title>
   <link rel="stylesheet" href="/static/css/style.css" />
-  <script src="https://cdn.jsdelivr.net/npm/heic2any@0.0.4/dist/heic2any.min.js"></script>
 </head>
 <body>
   <div class="app">
@@ -180,7 +179,14 @@
                 <div class="progress-fill" id="line-upload-progress" style="width: 0%;"></div>
               </div>
               <p class="panel-desc" id="line-upload-status-text" style="margin-top: 0.5rem;">待機中...</p>
+              <pre id="line-upload-logs" style="max-height: 200px; overflow-y: auto; background: #f5f5f5; padding: 8px; border-radius: 8px; font-size: 11px; margin-top: 0.5rem; white-space: pre-wrap; word-break: break-all;"></pre>
             </div>
+          </div>
+
+          <!-- デバッグスクリーンショット -->
+          <div id="debug-screenshots" hidden style="margin-top: 1rem;">
+            <h3 class="detail-title">デバッグスクリーンショット</h3>
+            <div class="debug-grid" style="display: flex; flex-wrap: wrap; gap: 8px;"></div>
           </div>
 
           <div class="actions" style="margin-top: 1rem;">
