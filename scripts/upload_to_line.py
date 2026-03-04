@@ -18,7 +18,9 @@ from playwright.sync_api import sync_playwright, Page, TimeoutError as PwTimeout
 
 CREATOR_URL = "https://creator.line.me/ja/"
 LOGIN_URL = "https://creator.line.me/signup/line_auth"
-DASHBOARD_URL = "https://creator.line.me/studio/app/folder"
+# ログイン後のダッシュボードは /my/{userId}/sticker/ の形式
+# ユーザーIDは動的なので /my/ をプレフィックスとして使う
+DASHBOARD_PREFIX = "/my/"
 
 
 class UploadStatus:
@@ -44,23 +46,21 @@ class UploadStatus:
 def _is_logged_in(page: Page) -> bool:
     """ページ上のログイン状態を判定する。"""
     url = page.url
-    # studio ダッシュボードにいる
-    if "/studio/" in url:
+    # /my/ 配下にいる（ダッシュボード）
+    if DASHBOARD_PREFIX in url:
         return True
     # LINE OAuth コールバック後のリダイレクト
     if "/signup/line_callback" in url:
         return True
-    # ログアウトリンクやナビ要素が存在する（＝ログイン済み）
+    # ログイン済みを示すナビ要素が存在する
     logged_in_selectors = [
         "a[href*='logout']",
-        "a[href*='/studio/']",
-        "a:has-text('マイページ')",
-        "a:has-text('My page')",
+        "a[href*='/my/']",
+        "a:has-text('アイテム管理')",
+        "a:has-text('新規登録')",
         "a:has-text('ログアウト')",
         "a:has-text('Log Out')",
-        "[class*='logout']",
-        "[class*='user-icon']",
-        "[class*='avatar']",
+        "a:has-text('アカウント設定')",
     ]
     for sel in logged_in_selectors:
         try:
@@ -94,9 +94,10 @@ def wait_for_login(page: Page, status: UploadStatus, timeout: int = 300) -> bool
         elapsed += interval
 
         current_url = page.url
+        status.update("ログイン", f"待機中... URL: {current_url[:80]}", 10)
 
-        # studio ダッシュボードにいる ＝ ログイン済み
-        if "/studio/" in current_url:
+        # /my/ 配下にいる ＝ ダッシュボードにリダイレクト済み
+        if DASHBOARD_PREFIX in current_url:
             status.update("ログイン", "ログイン完了！", 20)
             time.sleep(2)
             return True
@@ -107,12 +108,10 @@ def wait_for_login(page: Page, status: UploadStatus, timeout: int = 300) -> bool
             time.sleep(5)
             continue
 
-        # creator.line.me に戻ってきた場合
+        # creator.line.me のトップに戻ってきた場合
         if "creator.line.me" in current_url and "access.line.me" not in current_url:
             if _is_logged_in(page):
-                status.update("ログイン", "ログイン完了！ダッシュボードに移動中...", 20)
-                page.goto(DASHBOARD_URL, timeout=15000)
-                page.wait_for_load_state("networkidle", timeout=15000)
+                status.update("ログイン", "ログイン完了！", 20)
                 time.sleep(2)
                 return True
 
@@ -138,22 +137,18 @@ def _log_page_links(page: Page, status: UploadStatus):
 
 def navigate_to_new_sticker(page: Page, status: UploadStatus) -> bool:
     """スタンプ新規作成ページに遷移する。"""
-    status.update("ページ遷移", "ダッシュボードに移動中...", 25)
-
-    # studio ダッシュボードに移動
-    page.goto(DASHBOARD_URL, timeout=15000)
-    page.wait_for_load_state("networkidle", timeout=15000)
-    time.sleep(3)
-
     current_url = page.url
-    status.update("ページ遷移", f"現在のURL: {current_url}", 27)
+    status.update("ページ遷移", f"現在のURL: {current_url}", 25)
 
-    # ログインにリダイレクトされた場合はログイン待機
-    if "access.line.me" in current_url or "login" in current_url:
-        status.update("ページ遷移", "ログインが必要です。ログインしてください。", 27)
-        # ログイン後にダッシュボードに戻るまで待機
+    # /my/ 配下にいなければ、ログインページに飛ばしてダッシュボードまでリダイレクトさせる
+    if DASHBOARD_PREFIX not in current_url:
+        status.update("ページ遷移", "ダッシュボードに移動中...", 25)
+        page.goto(LOGIN_URL, timeout=15000)
+        page.wait_for_load_state("networkidle", timeout=15000)
+        time.sleep(3)
+        # ダッシュボードに遷移するまで待機
         try:
-            page.wait_for_url("**/studio/**", timeout=120000)
+            page.wait_for_url(f"**{DASHBOARD_PREFIX}**", timeout=120000)
             time.sleep(3)
         except PwTimeout:
             status.update("エラー", "ダッシュボードへの遷移がタイムアウトしました。")
@@ -165,63 +160,59 @@ def navigate_to_new_sticker(page: Page, status: UploadStatus) -> bool:
     # ダッシュボードのリンク・ボタンを記録
     _log_page_links(page, status)
 
-    # 「新規登録」「作成」系のリンク・ボタンを探してクリック
+    # サイドバーの「新規登録」ボタンをクリック
+    # スクリーンショットから: 緑色の「新規登録」ボタンがサイドバー上部にある
     new_btn_selectors = [
         "a:has-text('新規登録')",
-        "a:has-text('新規作成')",
-        "a:has-text('新しく作る')",
         "button:has-text('新規登録')",
+        "a:has-text('新規作成')",
         "button:has-text('新規作成')",
         "a:has-text('Create New')",
         "a:has-text('New Submission')",
-        "a:has-text('Create')",
-        "a:has-text('新規')",
-        "button:has-text('新規')",
-        "button:has-text('Create')",
-        # studio UIのアイコンボタン
-        "[class*='create']",
-        "[class*='add-new']",
-        "[class*='new-item']",
     ]
 
     clicked_new = False
     for sel in new_btn_selectors:
         try:
             btn = page.locator(sel).first
-            if btn.is_visible(timeout=2000):
+            if btn.is_visible(timeout=3000):
                 btn_text = (btn.text_content() or "").strip()
-                status.update("ページ遷移", f"ボタンをクリック: {btn_text or sel}", 30)
+                href = btn.get_attribute("href") or ""
+                status.update("ページ遷移", f"「{btn_text}」をクリック (href={href})", 30)
                 btn.click()
                 time.sleep(3)
-                page.wait_for_load_state("networkidle", timeout=10000)
+                page.wait_for_load_state("networkidle", timeout=15000)
                 clicked_new = True
                 break
         except Exception:
             continue
 
-    if clicked_new:
-        status.update("ページ遷移", f"クリック後のURL: {page.url}", 32)
+    if not clicked_new:
         _log_page_links(page, status)
+        status.update("エラー", "「新規登録」ボタンが見つかりません。")
+        return False
 
-    # スタンプタイプ選択画面が出た場合
-    sticker_selectors = [
+    current_url = page.url
+    status.update("ページ遷移", f"新規登録クリック後: {current_url}", 32)
+    _log_page_links(page, status)
+
+    # スタンプタイプ選択画面が出た場合（スタンプ / 絵文字 / 着せかえ の選択）
+    sticker_type_selectors = [
         "a:has-text('スタンプ')",
         "button:has-text('スタンプ')",
         "a:has-text('Sticker')",
-        "a:has-text('sticker')",
         "a[href*='sticker']",
-        "button:has-text('Sticker')",
     ]
 
-    for sel in sticker_selectors:
+    for sel in sticker_type_selectors:
         try:
             el = page.locator(sel).first
-            if el.is_visible(timeout=2000):
+            if el.is_visible(timeout=3000):
                 el_text = (el.text_content() or "").strip()
-                status.update("ページ遷移", f"「スタンプ」を選択: {el_text}", 33)
+                status.update("ページ遷移", f"「{el_text}」を選択", 33)
                 el.click()
                 time.sleep(3)
-                page.wait_for_load_state("networkidle", timeout=10000)
+                page.wait_for_load_state("networkidle", timeout=15000)
                 break
         except Exception:
             continue
