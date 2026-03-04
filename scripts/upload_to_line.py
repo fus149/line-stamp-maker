@@ -17,7 +17,8 @@ from playwright.sync_api import sync_playwright, Page, TimeoutError as PwTimeout
 
 
 CREATOR_URL = "https://creator.line.me/ja/"
-MYPAGE_URL = "https://creator.line.me/ja/mypage/"
+LOGIN_URL = "https://creator.line.me/signup/line_auth"
+DASHBOARD_URL = "https://creator.line.me/studio/app/folder"
 
 
 class UploadStatus:
@@ -42,19 +43,22 @@ class UploadStatus:
 
 def _is_logged_in(page: Page) -> bool:
     """ページ上のログイン状態を判定する。"""
-    # URL にマイページが含まれる
-    if "/mypage/" in page.url:
+    url = page.url
+    # studio ダッシュボードにいる
+    if "/studio/" in url:
         return True
-    # ログアウトリンクやマイページリンクが存在する（＝ログイン済み）
+    # LINE OAuth コールバック後のリダイレクト
+    if "/signup/line_callback" in url:
+        return True
+    # ログアウトリンクやナビ要素が存在する（＝ログイン済み）
     logged_in_selectors = [
         "a[href*='logout']",
-        "a[href*='mypage']",
+        "a[href*='/studio/']",
         "a:has-text('マイページ')",
         "a:has-text('My page')",
         "a:has-text('ログアウト')",
         "a:has-text('Log Out')",
         "[class*='logout']",
-        "[class*='mypage']",
         "[class*='user-icon']",
         "[class*='avatar']",
     ]
@@ -71,11 +75,11 @@ def wait_for_login(page: Page, status: UploadStatus, timeout: int = 300) -> bool
     """ユーザーがログインするまで待機。"""
     status.update("ログイン", "ブラウザが開きます。LINEアカウントでログインしてください。", 5)
 
-    # マイページに直接アクセス（未ログインならログイン画面にリダイレクトされる）
-    page.goto(MYPAGE_URL)
+    # LINE OAuth ログインページに直接アクセス
+    page.goto(LOGIN_URL)
     time.sleep(3)
 
-    # 既にログイン済みか確認（マイページが表示されている）
+    # 既にログイン済みか確認（ダッシュボードにリダイレクトされている場合）
     if _is_logged_in(page):
         status.update("ログイン", "既にログイン済みです。", 15)
         return True
@@ -91,19 +95,24 @@ def wait_for_login(page: Page, status: UploadStatus, timeout: int = 300) -> bool
 
         current_url = page.url
 
-        # マイページにいる ＝ ログイン済み
-        if "/mypage" in current_url and "login" not in current_url:
+        # studio ダッシュボードにいる ＝ ログイン済み
+        if "/studio/" in current_url:
             status.update("ログイン", "ログイン完了！", 20)
             time.sleep(2)
             return True
 
+        # OAuth コールバック後のリダイレクト
+        if "/signup/line_callback" in current_url:
+            status.update("ログイン", "認証コールバック検出、リダイレクト待機中...", 15)
+            time.sleep(5)
+            continue
+
         # creator.line.me に戻ってきた場合
-        if "creator.line.me" in current_url:
+        if "creator.line.me" in current_url and "access.line.me" not in current_url:
             if _is_logged_in(page):
-                status.update("ログイン", "ログイン完了！", 20)
-                # マイページに移動
-                page.goto(MYPAGE_URL, timeout=10000)
-                page.wait_for_load_state("networkidle", timeout=10000)
+                status.update("ログイン", "ログイン完了！ダッシュボードに移動中...", 20)
+                page.goto(DASHBOARD_URL, timeout=15000)
+                page.wait_for_load_state("networkidle", timeout=15000)
                 time.sleep(2)
                 return True
 
@@ -129,20 +138,34 @@ def _log_page_links(page: Page, status: UploadStatus):
 
 def navigate_to_new_sticker(page: Page, status: UploadStatus) -> bool:
     """スタンプ新規作成ページに遷移する。"""
-    status.update("ページ遷移", "マイページに移動中...", 25)
+    status.update("ページ遷移", "ダッシュボードに移動中...", 25)
 
-    # まずマイページに移動
-    page.goto(MYPAGE_URL, timeout=15000)
+    # studio ダッシュボードに移動
+    page.goto(DASHBOARD_URL, timeout=15000)
     page.wait_for_load_state("networkidle", timeout=15000)
     time.sleep(3)
 
     current_url = page.url
     status.update("ページ遷移", f"現在のURL: {current_url}", 27)
 
-    # マイページのリンク・ボタンを記録
+    # ログインにリダイレクトされた場合はログイン待機
+    if "access.line.me" in current_url or "login" in current_url:
+        status.update("ページ遷移", "ログインが必要です。ログインしてください。", 27)
+        # ログイン後にダッシュボードに戻るまで待機
+        try:
+            page.wait_for_url("**/studio/**", timeout=120000)
+            time.sleep(3)
+        except PwTimeout:
+            status.update("エラー", "ダッシュボードへの遷移がタイムアウトしました。")
+            return False
+
+    current_url = page.url
+    status.update("ページ遷移", f"ダッシュボード: {current_url}", 28)
+
+    # ダッシュボードのリンク・ボタンを記録
     _log_page_links(page, status)
 
-    # 「新規登録」系のリンク・ボタンを探してクリック
+    # 「新規登録」「作成」系のリンク・ボタンを探してクリック
     new_btn_selectors = [
         "a:has-text('新規登録')",
         "a:has-text('新規作成')",
@@ -151,8 +174,14 @@ def navigate_to_new_sticker(page: Page, status: UploadStatus) -> bool:
         "button:has-text('新規作成')",
         "a:has-text('Create New')",
         "a:has-text('New Submission')",
+        "a:has-text('Create')",
         "a:has-text('新規')",
         "button:has-text('新規')",
+        "button:has-text('Create')",
+        # studio UIのアイコンボタン
+        "[class*='create']",
+        "[class*='add-new']",
+        "[class*='new-item']",
     ]
 
     clicked_new = False
@@ -160,7 +189,8 @@ def navigate_to_new_sticker(page: Page, status: UploadStatus) -> bool:
         try:
             btn = page.locator(sel).first
             if btn.is_visible(timeout=2000):
-                status.update("ページ遷移", f"ボタンをクリック: {btn.text_content().strip()}", 30)
+                btn_text = (btn.text_content() or "").strip()
+                status.update("ページ遷移", f"ボタンをクリック: {btn_text or sel}", 30)
                 btn.click()
                 time.sleep(3)
                 page.wait_for_load_state("networkidle", timeout=10000)
@@ -178,14 +208,17 @@ def navigate_to_new_sticker(page: Page, status: UploadStatus) -> bool:
         "a:has-text('スタンプ')",
         "button:has-text('スタンプ')",
         "a:has-text('Sticker')",
+        "a:has-text('sticker')",
         "a[href*='sticker']",
+        "button:has-text('Sticker')",
     ]
 
     for sel in sticker_selectors:
         try:
             el = page.locator(sel).first
             if el.is_visible(timeout=2000):
-                status.update("ページ遷移", f"「スタンプ」を選択: {el.text_content().strip()}", 33)
+                el_text = (el.text_content() or "").strip()
+                status.update("ページ遷移", f"「スタンプ」を選択: {el_text}", 33)
                 el.click()
                 time.sleep(3)
                 page.wait_for_load_state("networkidle", timeout=10000)
