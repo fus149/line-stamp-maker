@@ -13,7 +13,7 @@ from typing import List, Optional, Tuple
 import numpy as np
 from PIL import Image, ImageDraw, ImageEnhance, ImageFont, ExifTags
 from pillow_heif import register_heif_opener
-from rembg import remove
+from rembg import remove, new_session
 
 # HEIC/HEIF形式をPillowで読めるように登録
 register_heif_opener()
@@ -84,14 +84,27 @@ def correct_brightness(img: Image.Image, threshold: float = 85.0) -> Image.Image
     return img
 
 
+# IS-Netモデルをモジュール読み込み時に一度だけ初期化
+_bg_session = None
+
+
+def _get_bg_session():
+    global _bg_session
+    if _bg_session is None:
+        _bg_session = new_session("isnet-general-use")
+    return _bg_session
+
+
 def remove_background(img: Image.Image) -> Image.Image:
-    """背景を除去し、毛並みを自然に保持する。"""
+    """背景を除去し、毛並みを自然に保持する（IS-Net + alpha matting）。"""
+    session = _get_bg_session()
     result = remove(
         img,
+        session=session,
         alpha_matting=True,
-        alpha_matting_foreground_threshold=240,
-        alpha_matting_background_threshold=15,
-        alpha_matting_erode_size=10,
+        alpha_matting_foreground_threshold=230,
+        alpha_matting_background_threshold=20,
+        alpha_matting_erode_size=8,
     )
     return result
 
