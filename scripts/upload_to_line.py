@@ -40,6 +40,33 @@ class UploadStatus:
             self.status_file.write_text(json.dumps(data, ensure_ascii=False), encoding="utf-8")
 
 
+def _is_logged_in(page: Page) -> bool:
+    """ページ上のログイン状態を判定する。"""
+    # URL にマイページが含まれる
+    if "/mypage/" in page.url:
+        return True
+    # ログアウトリンクやマイページリンクが存在する（＝ログイン済み）
+    logged_in_selectors = [
+        "a[href*='logout']",
+        "a[href*='mypage']",
+        "a:has-text('マイページ')",
+        "a:has-text('My page')",
+        "a:has-text('ログアウト')",
+        "a:has-text('Log Out')",
+        "[class*='logout']",
+        "[class*='mypage']",
+        "[class*='user-icon']",
+        "[class*='avatar']",
+    ]
+    for sel in logged_in_selectors:
+        try:
+            if page.locator(sel).first.is_visible(timeout=500):
+                return True
+        except Exception:
+            continue
+    return False
+
+
 def wait_for_login(page: Page, status: UploadStatus, timeout: int = 300) -> bool:
     """ユーザーがログインするまで待機。"""
     status.update("ログイン", "ブラウザが開きます。LINEアカウントでログインしてください。", 5)
@@ -48,7 +75,7 @@ def wait_for_login(page: Page, status: UploadStatus, timeout: int = 300) -> bool
     time.sleep(3)
 
     # 既にログイン済みか確認
-    if "/mypage/" in page.url:
+    if _is_logged_in(page):
         status.update("ログイン", "既にログイン済みです。", 15)
         return True
 
@@ -63,15 +90,38 @@ def wait_for_login(page: Page, status: UploadStatus, timeout: int = 300) -> bool
 
     status.update("ログイン", f"ログイン待機中... ({timeout}秒以内にログインしてください)", 10)
 
-    # マイページ遷移（＝ログイン完了）を待機
-    try:
-        page.wait_for_url("**/mypage/**", timeout=timeout * 1000)
-        status.update("ログイン", "ログイン完了！", 20)
-        time.sleep(2)
-        return True
-    except PwTimeout:
-        status.update("エラー", "タイムアウト: ログインが完了しませんでした。")
-        return False
+    # ポーリングでログイン完了を検出
+    elapsed = 0
+    interval = 3
+    while elapsed < timeout:
+        time.sleep(interval)
+        elapsed += interval
+
+        # creator.line.me に戻っているか確認
+        current_url = page.url
+        if "creator.line.me" not in current_url:
+            # まだLINEログインページ等にいる
+            continue
+
+        # ページ上のログイン状態を確認
+        if _is_logged_in(page):
+            status.update("ログイン", "ログイン完了！", 20)
+            time.sleep(2)
+            return True
+
+        # creator.line.meに戻ったがログイン状態不明 → マイページに移動して確認
+        try:
+            page.goto(MYPAGE_URL, timeout=10000)
+            page.wait_for_load_state("networkidle", timeout=10000)
+            time.sleep(2)
+            if "login" not in page.url.lower() and "error" not in page.url.lower():
+                status.update("ログイン", "ログイン完了！", 20)
+                return True
+        except Exception:
+            pass
+
+    status.update("エラー", "タイムアウト: ログインが完了しませんでした。")
+    return False
 
 
 def navigate_to_new_sticker(page: Page, status: UploadStatus) -> bool:
