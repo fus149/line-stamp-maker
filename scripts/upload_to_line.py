@@ -71,22 +71,14 @@ def wait_for_login(page: Page, status: UploadStatus, timeout: int = 300) -> bool
     """ユーザーがログインするまで待機。"""
     status.update("ログイン", "ブラウザが開きます。LINEアカウントでログインしてください。", 5)
 
-    page.goto(CREATOR_URL)
+    # マイページに直接アクセス（未ログインならログイン画面にリダイレクトされる）
+    page.goto(MYPAGE_URL)
     time.sleep(3)
 
-    # 既にログイン済みか確認
+    # 既にログイン済みか確認（マイページが表示されている）
     if _is_logged_in(page):
         status.update("ログイン", "既にログイン済みです。", 15)
         return True
-
-    # ログインボタンを探してクリック
-    try:
-        login_link = page.locator("a[href*='login'], a:has-text('ログイン'), a:has-text('Log In')").first
-        if login_link.is_visible(timeout=3000):
-            login_link.click()
-            time.sleep(2)
-    except Exception:
-        pass
 
     status.update("ログイン", f"ログイン待機中... ({timeout}秒以内にログインしてください)", 10)
 
@@ -97,28 +89,23 @@ def wait_for_login(page: Page, status: UploadStatus, timeout: int = 300) -> bool
         time.sleep(interval)
         elapsed += interval
 
-        # creator.line.me に戻っているか確認
         current_url = page.url
-        if "creator.line.me" not in current_url:
-            # まだLINEログインページ等にいる
-            continue
 
-        # ページ上のログイン状態を確認
-        if _is_logged_in(page):
+        # マイページにいる ＝ ログイン済み
+        if "/mypage" in current_url and "login" not in current_url:
             status.update("ログイン", "ログイン完了！", 20)
             time.sleep(2)
             return True
 
-        # creator.line.meに戻ったがログイン状態不明 → マイページに移動して確認
-        try:
-            page.goto(MYPAGE_URL, timeout=10000)
-            page.wait_for_load_state("networkidle", timeout=10000)
-            time.sleep(2)
-            if "login" not in page.url.lower() and "error" not in page.url.lower():
+        # creator.line.me に戻ってきた場合
+        if "creator.line.me" in current_url:
+            if _is_logged_in(page):
                 status.update("ログイン", "ログイン完了！", 20)
+                # マイページに移動
+                page.goto(MYPAGE_URL, timeout=10000)
+                page.wait_for_load_state("networkidle", timeout=10000)
+                time.sleep(2)
                 return True
-        except Exception:
-            pass
 
     status.update("エラー", "タイムアウト: ログインが完了しませんでした。")
     return False
