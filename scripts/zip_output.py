@@ -4,11 +4,13 @@ ZIP出力モジュール
 01.png〜08.png を line_stamp.zip にパッケージングする。
 """
 
+from __future__ import annotations
+
 import zipfile
 from pathlib import Path
 
 
-def create_zip(output_dir: str | Path, zip_path: str | Path | None = None) -> Path:
+def create_zip(output_dir, zip_path=None) -> Path:
     """スタンプ画像をZIPファイルにまとめる。
 
     Args:

@@ -1,0 +1,180 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>LINEスタンプ自動でつくるくん</title>
+  <link rel="stylesheet" href="/static/css/style.css" />
+</head>
+<body>
+  <div class="app">
+    <!-- ヘッダー -->
+    <header class="header">
+      <div class="header-inner">
+        <h1 class="logo">
+          <span class="logo-icon">🐾</span>
+          LINEスタンプ自動でつくるくん
+        </h1>
+        <p class="subtitle">ペット写真8枚でオリジナルスタンプを作ろう</p>
+      </div>
+    </header>
+
+    <!-- ステップインジケーター -->
+    <nav class="steps">
+      <div class="steps-inner">
+        <div class="step active" data-step="1">
+          <div class="step-number">1</div>
+          <div class="step-label">写真アップロード</div>
+        </div>
+        <div class="step-line"></div>
+        <div class="step" data-step="2">
+          <div class="step-number">2</div>
+          <div class="step-label">メッセージ設定</div>
+        </div>
+        <div class="step-line"></div>
+        <div class="step" data-step="3">
+          <div class="step-number">3</div>
+          <div class="step-label">生成・ダウンロード</div>
+        </div>
+      </div>
+    </nav>
+
+    <!-- メインコンテンツ -->
+    <main class="main">
+      <!-- Step 1: 画像アップロード -->
+      <section class="panel active" id="panel-1">
+        <h2 class="panel-title">ペットの写真を8枚選んでください</h2>
+        <p class="panel-desc">JPG・PNG・WebP・HEIC に対応しています</p>
+
+        <div class="upload-area" id="upload-area">
+          <div class="upload-icon">📷</div>
+          <p class="upload-text">ここにドラッグ&ドロップ</p>
+          <p class="upload-or">または</p>
+          <label class="btn btn-outline" for="file-input">ファイルを選択</label>
+          <input type="file" id="file-input" multiple accept="image/*" hidden />
+        </div>
+
+        <div class="preview-grid" id="preview-grid"></div>
+
+        <div class="counter" id="counter" hidden>
+          <span id="count">0</span> / 8 枚
+        </div>
+
+        <div class="actions">
+          <button class="btn btn-primary btn-lg" id="btn-next-1" disabled>
+            次へ →
+          </button>
+        </div>
+      </section>
+
+      <!-- Step 2: メッセージ設定 -->
+      <section class="panel" id="panel-2">
+        <h2 class="panel-title">メッセージモードを選んでください</h2>
+
+        <div class="mode-cards">
+          <div class="mode-card selected" data-mode="A">
+            <div class="mode-icon">🎲</div>
+            <div class="mode-name">ランダム</div>
+            <div class="mode-desc">おすすめメッセージから自動で8個選びます</div>
+          </div>
+          <div class="mode-card" data-mode="B">
+            <div class="mode-icon">📋</div>
+            <div class="mode-name">テンプレから選ぶ</div>
+            <div class="mode-desc">一覧から好きなメッセージを8個選びます</div>
+          </div>
+          <div class="mode-card" data-mode="C">
+            <div class="mode-icon">✏️</div>
+            <div class="mode-name">自分で入力</div>
+            <div class="mode-desc">オリジナルのメッセージを8個入力します</div>
+          </div>
+          <div class="mode-card" data-mode="D">
+            <div class="mode-icon">🖼️</div>
+            <div class="mode-name">文字なし</div>
+            <div class="mode-desc">画像だけのスタンプを作ります</div>
+          </div>
+        </div>
+
+        <!-- モードB: テンプレート選択 -->
+        <div class="mode-detail" id="detail-B" hidden>
+          <h3 class="detail-title">8個のメッセージを選んでください</h3>
+          <div class="template-grid" id="template-grid"></div>
+          <p class="template-count"><span id="template-selected">0</span> / 8 個選択中</p>
+        </div>
+
+        <!-- モードC: 自由入力 -->
+        <div class="mode-detail" id="detail-C" hidden>
+          <h3 class="detail-title">8個のメッセージを入力してください</h3>
+          <div class="input-list" id="input-list">
+            <div class="input-row"><span class="input-num">1</span><input type="text" class="msg-input" maxlength="20" placeholder="ありがとう" /></div>
+            <div class="input-row"><span class="input-num">2</span><input type="text" class="msg-input" maxlength="20" placeholder="了解です" /></div>
+            <div class="input-row"><span class="input-num">3</span><input type="text" class="msg-input" maxlength="20" placeholder="おつかれさま" /></div>
+            <div class="input-row"><span class="input-num">4</span><input type="text" class="msg-input" maxlength="20" placeholder="いいね！" /></div>
+            <div class="input-row"><span class="input-num">5</span><input type="text" class="msg-input" maxlength="20" placeholder="よろしく！" /></div>
+            <div class="input-row"><span class="input-num">6</span><input type="text" class="msg-input" maxlength="20" placeholder="ごめんね" /></div>
+            <div class="input-row"><span class="input-num">7</span><input type="text" class="msg-input" maxlength="20" placeholder="おやすみ" /></div>
+            <div class="input-row"><span class="input-num">8</span><input type="text" class="msg-input" maxlength="20" placeholder="おはよう" /></div>
+          </div>
+        </div>
+
+        <div class="actions">
+          <button class="btn btn-ghost" id="btn-back-2">← 戻る</button>
+          <button class="btn btn-primary btn-lg" id="btn-next-2">スタンプを作る 🎉</button>
+        </div>
+      </section>
+
+      <!-- Step 3: 生成 & ダウンロード -->
+      <section class="panel" id="panel-3">
+        <!-- 処理中 -->
+        <div id="processing" hidden>
+          <div class="processing-animation">
+            <div class="spinner"></div>
+          </div>
+          <h2 class="panel-title">スタンプを生成しています...</h2>
+          <p class="panel-desc">背景の切り抜きに少し時間がかかります。<br />そのままお待ちください。</p>
+          <div class="progress-bar">
+            <div class="progress-fill" id="progress-fill"></div>
+          </div>
+        </div>
+
+        <!-- 完了 -->
+        <div id="result" hidden>
+          <h2 class="panel-title">スタンプが完成しました！</h2>
+
+          <div class="result-grid" id="result-grid"></div>
+
+          <div class="actions">
+            <a class="btn btn-primary btn-lg" id="btn-download" href="#" download>
+              ZIPをダウンロード 📦
+            </a>
+          </div>
+
+          <p class="result-hint">
+            ダウンロードしたZIPを
+            <a href="https://creator.line.me/" target="_blank" rel="noopener">LINE Creators Market</a>
+            にアップロードしてください
+          </p>
+
+          <div class="actions" style="margin-top: 1rem;">
+            <button class="btn btn-ghost" id="btn-restart">もう一度作る</button>
+          </div>
+        </div>
+
+        <!-- エラー -->
+        <div id="error-panel" hidden>
+          <h2 class="panel-title">エラーが発生しました</h2>
+          <p class="error-message" id="error-message"></p>
+          <div class="actions">
+            <button class="btn btn-ghost" id="btn-retry">やり直す</button>
+          </div>
+        </div>
+      </section>
+    </main>
+
+    <footer class="footer">
+      <p>LINE Creators Market 静止画スタンプ規格（370×320px / 透過PNG）に対応</p>
+    </footer>
+  </div>
+
+  <script src="/static/js/app.js"></script>
+</body>
+</html>

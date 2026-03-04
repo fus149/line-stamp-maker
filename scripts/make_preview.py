@@ -4,7 +4,10 @@
 8枚のスタンプを並べた確認用画像を生成する。
 """
 
+from __future__ import annotations
+
 from pathlib import Path
+from typing import Optional
 
 from PIL import Image
 

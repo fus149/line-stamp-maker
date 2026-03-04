@@ -1,0 +1,11 @@
+{
+  "version": "0.0.1",
+  "configurations": [
+    {
+      "name": "stamp-maker",
+      "runtimeExecutable": "/Users/fus/line-stamp-maker/.venv/bin/uvicorn",
+      "runtimeArgs": ["app:app", "--reload", "--host", "0.0.0.0", "--port", "8000"],
+      "port": 8000
+    }
+  ]
+}

@@ -4,8 +4,11 @@ LINEスタンプ画像処理モジュール
 ペット画像の背景除去、構図調整、文字入れを行う。
 """
 
+from __future__ import annotations
+
 import os
 from pathlib import Path
+from typing import List, Optional, Tuple
 
 import numpy as np
 from PIL import Image, ImageDraw, ImageEnhance, ImageFont, ExifTags
@@ -30,7 +33,7 @@ FONT_CANDIDATES = [
 ]
 
 
-def _load_font(font_path: str | None = None, size: int = 32) -> ImageFont.FreeTypeFont:
+def _load_font(font_path: Optional[str] = None, size: int = 32) -> ImageFont.FreeTypeFont:
     """丸ゴシックフォントをロードする。"""
     if font_path and os.path.exists(font_path):
         return ImageFont.truetype(font_path, size)
@@ -43,7 +46,7 @@ def _load_font(font_path: str | None = None, size: int = 32) -> ImageFont.FreeTy
     try:
         return ImageFont.truetype("/System/Library/Fonts/Supplemental/Arial Unicode.ttf", size)
     except OSError:
-        return ImageFont.load_default(size=size)
+        return ImageFont.load_default()
 
 
 def correct_orientation(img: Image.Image) -> Image.Image:
@@ -89,7 +92,7 @@ def remove_background(img: Image.Image) -> Image.Image:
     return result
 
 
-def _get_subject_bbox(img: Image.Image) -> tuple[int, int, int, int]:
+def _get_subject_bbox(img: Image.Image) -> Tuple[int, int, int, int]:
     """透過部分を除いた被写体のバウンディングボックスを取得する。"""
     if img.mode != "RGBA":
         return (0, 0, img.width, img.height)
@@ -146,7 +149,7 @@ def _wrap_text(text: str, font: ImageFont.FreeTypeFont, max_width: int) -> str:
 
 
 def _center_and_resize(
-    img: Image.Image, text_position: str | None, has_text: bool
+    img: Image.Image, text_position: Optional[str], has_text: bool
 ) -> Image.Image:
     """被写体を中央配置し、スタンプサイズにリサイズする。"""
     bbox = _get_subject_bbox(img)
@@ -184,7 +187,7 @@ def _add_text(
     img: Image.Image,
     text: str,
     text_position: str,
-    font_path: str | None = None,
+    font_path: Optional[str] = None,
     font_size: int = 32,
 ) -> Image.Image:
     """白文字＋黒縁取りのテキストを追加する。"""
@@ -219,10 +222,10 @@ def _add_text(
 
 
 def process_single_image(
-    input_path: str | Path,
-    output_path: str | Path,
-    message: str | None = None,
-    font_path: str | None = None,
+    input_path,
+    output_path,
+    message: Optional[str] = None,
+    font_path: Optional[str] = None,
     font_size: int = 32,
 ) -> Path:
     """1枚の画像をLINEスタンプに変換する。
@@ -276,12 +279,12 @@ def process_single_image(
 
 
 def process_all_images(
-    input_dir: str | Path,
-    output_dir: str | Path,
-    messages: list[str | None],
-    font_path: str | None = None,
+    input_dir,
+    output_dir,
+    messages: List[Optional[str]],
+    font_path: Optional[str] = None,
     font_size: int = 32,
-) -> list[Path]:
+) -> List[Path]:
     """8枚の画像を一括処理する。
 
     Args:
