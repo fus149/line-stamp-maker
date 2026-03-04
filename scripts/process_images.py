@@ -1,0 +1,326 @@
+"""
+LINEスタンプ画像処理モジュール
+
+ペット画像の背景除去、構図調整、文字入れを行う。
+"""
+
+import os
+from pathlib import Path
+
+import numpy as np
+from PIL import Image, ImageDraw, ImageEnhance, ImageFont, ExifTags
+from rembg import remove
+
+STAMP_WIDTH = 370
+STAMP_HEIGHT = 320
+MARGIN = 15
+TEXT_AREA_HEIGHT = 55
+OUTLINE_WIDTH = 3
+
+# --- フォント候補（丸ゴシック優先） ---
+FONT_CANDIDATES = [
+    # macOS
+    "/System/Library/Fonts/ヒラギノ丸ゴ ProN W4.ttc",
+    "/System/Library/Fonts/Hiragino Sans GB W3.otf",
+    "/System/Library/Fonts/HiraginoSans-W6.ttc",
+    # Linux (rounded-mgenplus等を手動インストール)
+    "/usr/share/fonts/truetype/rounded-mgenplus/rounded-mgenplus-1c-medium.ttf",
+    # プロジェクト内バンドルフォント
+    str(Path(__file__).resolve().parent.parent / "fonts" / "font.ttf"),
+]
+
+
+def _load_font(font_path: str | None = None, size: int = 32) -> ImageFont.FreeTypeFont:
+    """丸ゴシックフォントをロードする。"""
+    if font_path and os.path.exists(font_path):
+        return ImageFont.truetype(font_path, size)
+
+    for candidate in FONT_CANDIDATES:
+        if os.path.exists(candidate):
+            return ImageFont.truetype(candidate, size)
+
+    print("警告: 丸ゴシックフォントが見つかりません。デフォルトフォントを使用します。")
+    try:
+        return ImageFont.truetype("/System/Library/Fonts/Supplemental/Arial Unicode.ttf", size)
+    except OSError:
+        return ImageFont.load_default(size=size)
+
+
+def correct_orientation(img: Image.Image) -> Image.Image:
+    """EXIF情報に基づいて画像の向きを補正する。"""
+    try:
+        exif = img._getexif()
+        if not exif:
+            return img
+        orientation_key = None
+        for tag, name in ExifTags.TAGS.items():
+            if name == "Orientation":
+                orientation_key = tag
+                break
+        if orientation_key and orientation_key in exif:
+            orientation = exif[orientation_key]
+            rotations = {3: 180, 6: 270, 8: 90}
+            if orientation in rotations:
+                img = img.rotate(rotations[orientation], expand=True)
+    except (AttributeError, KeyError):
+        pass
+    return img
+
+
+def correct_brightness(img: Image.Image, threshold: float = 85.0) -> Image.Image:
+    """暗すぎる画像の明るさを自動補正する。"""
+    grayscale = img.convert("L")
+    mean_brightness = np.array(grayscale).mean()
+    if mean_brightness < threshold:
+        factor = min(threshold / max(mean_brightness, 1), 2.0)
+        img = ImageEnhance.Brightness(img).enhance(factor)
+    return img
+
+
+def remove_background(img: Image.Image) -> Image.Image:
+    """背景を除去し、毛並みを自然に保持する。"""
+    result = remove(
+        img,
+        alpha_matting=True,
+        alpha_matting_foreground_threshold=240,
+        alpha_matting_background_threshold=15,
+        alpha_matting_erode_size=10,
+    )
+    return result
+
+
+def _get_subject_bbox(img: Image.Image) -> tuple[int, int, int, int]:
+    """透過部分を除いた被写体のバウンディングボックスを取得する。"""
+    if img.mode != "RGBA":
+        return (0, 0, img.width, img.height)
+
+    alpha = np.array(img)[:, :, 3]
+    rows = np.any(alpha > 10, axis=1)
+    cols = np.any(alpha > 10, axis=0)
+
+    if not rows.any() or not cols.any():
+        return (0, 0, img.width, img.height)
+
+    rmin, rmax = np.where(rows)[0][[0, -1]]
+    cmin, cmax = np.where(cols)[0][[0, -1]]
+    return (int(cmin), int(rmin), int(cmax) + 1, int(rmax) + 1)
+
+
+def _detect_face_position(img: Image.Image) -> str:
+    """被写体の顔が上部か下部かを推定する。
+
+    ペットの顔は通常上部にあるため、上半分のコンテンツ密度が
+    高い場合に 'upper' を返す。
+    """
+    if img.mode != "RGBA":
+        return "upper"
+
+    alpha = np.array(img)[:, :, 3]
+    h = alpha.shape[0]
+    # 上部 1/3 と 下部 1/3 を比較
+    upper_third = np.sum(alpha[: h // 3] > 10)
+    lower_third = np.sum(alpha[2 * h // 3 :] > 10)
+
+    return "upper" if upper_third >= lower_third else "lower"
+
+
+def _wrap_text(text: str, font: ImageFont.FreeTypeFont, max_width: int) -> str:
+    """テキストが最大幅を超える場合に自動改行する。"""
+    dummy = Image.new("RGBA", (1, 1))
+    draw = ImageDraw.Draw(dummy)
+
+    bbox = draw.textbbox((0, 0), text, font=font)
+    if bbox[2] - bbox[0] <= max_width:
+        return text
+
+    # 文字単位で改行位置を探す
+    best_break = len(text) // 2
+    for i in range(len(text)):
+        line1 = text[: i + 1]
+        bbox1 = draw.textbbox((0, 0), line1, font=font)
+        if bbox1[2] - bbox1[0] > max_width:
+            best_break = max(i - 1, 1)
+            break
+
+    return text[:best_break] + "\n" + text[best_break:]
+
+
+def _center_and_resize(
+    img: Image.Image, text_position: str | None, has_text: bool
+) -> Image.Image:
+    """被写体を中央配置し、スタンプサイズにリサイズする。"""
+    bbox = _get_subject_bbox(img)
+    cropped = img.crop(bbox)
+
+    available_w = STAMP_WIDTH - (MARGIN * 2)
+    if has_text:
+        available_h = STAMP_HEIGHT - (MARGIN * 2) - TEXT_AREA_HEIGHT
+    else:
+        available_h = STAMP_HEIGHT - (MARGIN * 2)
+
+    ratio = min(available_w / cropped.width, available_h / cropped.height)
+    new_w = int(cropped.width * ratio)
+    new_h = int(cropped.height * ratio)
+    cropped = cropped.resize((new_w, new_h), Image.LANCZOS)
+
+    canvas = Image.new("RGBA", (STAMP_WIDTH, STAMP_HEIGHT), (0, 0, 0, 0))
+
+    x = (STAMP_WIDTH - new_w) // 2
+
+    if has_text and text_position == "top":
+        # テキストが上 → 被写体は下
+        y = MARGIN + TEXT_AREA_HEIGHT + (available_h - new_h) // 2
+    elif has_text and text_position == "bottom":
+        # テキストが下 → 被写体は上
+        y = MARGIN + (available_h - new_h) // 2
+    else:
+        y = (STAMP_HEIGHT - new_h) // 2
+
+    canvas.paste(cropped, (x, y), cropped)
+    return canvas
+
+
+def _add_text(
+    img: Image.Image,
+    text: str,
+    text_position: str,
+    font_path: str | None = None,
+    font_size: int = 32,
+) -> Image.Image:
+    """白文字＋黒縁取りのテキストを追加する。"""
+    font = _load_font(font_path, font_size)
+    draw = ImageDraw.Draw(img)
+
+    max_text_width = STAMP_WIDTH - (MARGIN * 2) - 10
+    text = _wrap_text(text, font, max_text_width)
+
+    bbox = draw.textbbox((0, 0), text, font=font)
+    text_w = bbox[2] - bbox[0]
+    text_h = bbox[3] - bbox[1]
+
+    x = (STAMP_WIDTH - text_w) // 2
+
+    if text_position == "bottom":
+        y = STAMP_HEIGHT - text_h - MARGIN - 5
+    else:
+        y = MARGIN + 5
+
+    # 黒縁取り
+    for dx in range(-OUTLINE_WIDTH, OUTLINE_WIDTH + 1):
+        for dy in range(-OUTLINE_WIDTH, OUTLINE_WIDTH + 1):
+            if dx * dx + dy * dy <= OUTLINE_WIDTH * OUTLINE_WIDTH + 1:
+                draw.text(
+                    (x + dx, y + dy), text, font=font, fill=(0, 0, 0, 255), anchor=None
+                )
+
+    # 白文字
+    draw.text((x, y), text, font=font, fill=(255, 255, 255, 255))
+    return img
+
+
+def process_single_image(
+    input_path: str | Path,
+    output_path: str | Path,
+    message: str | None = None,
+    font_path: str | None = None,
+    font_size: int = 32,
+) -> Path:
+    """1枚の画像をLINEスタンプに変換する。
+
+    Args:
+        input_path: 入力画像パス
+        output_path: 出力PNGパス
+        message: スタンプに表示するメッセージ（Noneの場合テキストなし）
+        font_path: フォントファイルパス（省略時は自動検出）
+        font_size: フォントサイズ
+
+    Returns:
+        出力ファイルのパス
+    """
+    output_path = Path(output_path)
+
+    # 画像読み込み
+    img = Image.open(input_path).convert("RGBA")
+
+    # Step1: 向き補正
+    img = correct_orientation(img)
+
+    # Step1: 明るさ補正
+    img_rgb = img.convert("RGB")
+    img_rgb = correct_brightness(img_rgb)
+    img = img_rgb.convert("RGBA")
+
+    # Step2: 背景除去
+    print(f"  背景除去中... {Path(input_path).name}")
+    img = remove_background(img)
+
+    # 顔位置検出 → テキスト配置決定
+    has_text = message is not None and message.strip() != ""
+    if has_text:
+        face_pos = _detect_face_position(img)
+        text_position = "bottom" if face_pos == "upper" else "top"
+    else:
+        text_position = None
+
+    # Step3: 構図調整
+    img = _center_and_resize(img, text_position, has_text)
+
+    # 文字追加
+    if has_text:
+        img = _add_text(img, message, text_position, font_path, font_size)
+
+    # 保存
+    img.save(str(output_path), "PNG")
+    print(f"  完了: {output_path.name}")
+    return output_path
+
+
+def process_all_images(
+    input_dir: str | Path,
+    output_dir: str | Path,
+    messages: list[str | None],
+    font_path: str | None = None,
+    font_size: int = 32,
+) -> list[Path]:
+    """8枚の画像を一括処理する。
+
+    Args:
+        input_dir: 入力画像ディレクトリ
+        output_dir: 出力ディレクトリ
+        messages: 8つのメッセージ（メッセージなしの場合はNoneを含むリスト）
+        font_path: フォントファイルパス
+        font_size: フォントサイズ
+
+    Returns:
+        出力ファイルパスのリスト
+    """
+    input_dir = Path(input_dir)
+    output_dir = Path(output_dir)
+    output_dir.mkdir(parents=True, exist_ok=True)
+
+    # 画像ファイル収集（拡張子でフィルタ）
+    valid_extensions = {".jpg", ".jpeg", ".png", ".webp", ".heic", ".heif", ".bmp"}
+    image_files = sorted(
+        [f for f in input_dir.iterdir() if f.suffix.lower() in valid_extensions]
+    )
+
+    if len(image_files) < 8:
+        raise ValueError(
+            f"画像が{len(image_files)}枚しかありません。8枚必要です。"
+        )
+
+    if len(image_files) > 8:
+        print(f"注意: {len(image_files)}枚の画像が見つかりました。最初の8枚を使用します。")
+        image_files = image_files[:8]
+
+    if len(messages) != 8:
+        raise ValueError(f"メッセージは8個必要です（現在{len(messages)}個）。")
+
+    results = []
+    for i, (img_file, msg) in enumerate(zip(image_files, messages), start=1):
+        output_path = output_dir / f"{i:02d}.png"
+        print(f"\n[{i}/8] {img_file.name} を処理中...")
+        result = process_single_image(img_file, output_path, msg, font_path, font_size)
+        results.append(result)
+
+    return results
