@@ -24,6 +24,10 @@ MARGIN = 15
 TEXT_AREA_HEIGHT = 55
 OUTLINE_WIDTH = 3
 
+# LINE Creators Market 必須画像サイズ
+MAIN_IMAGE_SIZE = (240, 240)  # メイン画像
+TAB_IMAGE_SIZE = (96, 74)     # タブ画像
+
 # --- フォント候補（丸ゴシック優先） ---
 FONT_CANDIDATES = [
     # macOS
@@ -343,4 +347,58 @@ def process_all_images(
         result = process_single_image(img_file, output_path, msg, font_path, font_size)
         results.append(result)
 
+    # main.png / tab.png を自動生成
+    generate_main_and_tab(output_dir)
+
     return results
+
+
+def generate_main_and_tab(output_dir: Path):
+    """01.pngからmain画像(240x240)とtab画像(96x74)を生成する。
+    LINE Creators Marketの必須画像。透過PNG。
+    """
+    output_dir = Path(output_dir)
+    source = output_dir / "01.png"
+    if not source.exists():
+        print("警告: 01.pngが見つかりません。main/tab画像を生成できません。")
+        return
+
+    img = Image.open(source).convert("RGBA")
+
+    # main.png: 240x240 - 被写体を中央配置
+    main_img = _fit_to_canvas(img, MAIN_IMAGE_SIZE[0], MAIN_IMAGE_SIZE[1])
+    main_path = output_dir / "main.png"
+    main_img.save(main_path)
+    print(f"main.png 生成完了: {MAIN_IMAGE_SIZE[0]}x{MAIN_IMAGE_SIZE[1]}")
+
+    # tab.png: 96x74 - 被写体を中央配置
+    tab_img = _fit_to_canvas(img, TAB_IMAGE_SIZE[0], TAB_IMAGE_SIZE[1])
+    tab_path = output_dir / "tab.png"
+    tab_img.save(tab_path)
+    print(f"tab.png 生成完了: {TAB_IMAGE_SIZE[0]}x{TAB_IMAGE_SIZE[1]}")
+
+
+def _fit_to_canvas(img: Image.Image, canvas_w: int, canvas_h: int) -> Image.Image:
+    """画像を指定サイズのキャンバスに収まるようリサイズして中央配置する。"""
+    # 透明部分をトリミングして被写体だけ取得
+    bbox = img.getbbox()
+    if bbox:
+        img = img.crop(bbox)
+
+    # マージン（4px）を確保してリサイズ
+    margin = 4
+    max_w = canvas_w - margin * 2
+    max_h = canvas_h - margin * 2
+
+    # アスペクト比を維持してリサイズ
+    ratio = min(max_w / img.width, max_h / img.height)
+    new_w = int(img.width * ratio)
+    new_h = int(img.height * ratio)
+    resized = img.resize((new_w, new_h), Image.LANCZOS)
+
+    # 透明キャンバスに中央配置
+    canvas = Image.new("RGBA", (canvas_w, canvas_h), (0, 0, 0, 0))
+    x = (canvas_w - new_w) // 2
+    y = (canvas_h - new_h) // 2
+    canvas.paste(resized, (x, y), resized)
+    return canvas

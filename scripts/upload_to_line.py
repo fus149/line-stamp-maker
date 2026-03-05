@@ -1208,16 +1208,45 @@ def upload_images(page: Page, output_dir: Path, status: UploadStatus):
     status.save_screenshot(page, "09_upload_page")
     status.dump_page_info(page, "画像アップロードページ")
 
+    # main.png / tab.png の存在確認
+    main_file = output_dir / "main.png"
+    tab_file = output_dir / "tab.png"
+    has_main = main_file.exists()
+    has_tab = tab_file.exists()
+    status.update("画像アップ", f"main.png: {'あり' if has_main else 'なし'}, tab.png: {'あり' if has_tab else 'なし'}")
+
     # 方法1: 複数のfile inputがある場合（一度に全てセット可能）
     file_inputs = page.locator("input[type='file']")
     fi_count = file_inputs.count()
     status.update("画像アップ", f"file input数: {fi_count}", 66)
 
     if fi_count >= total:
-        # 十分な数のfile inputがある → 各inputに1枚ずつ
+        # file inputの構成を判定:
+        # fi_count > total → 先頭にmain/tabスロットがある（例: 11 = main + tab + 01〜08 + ZIP?）
+        # 証拠(session b45b0b87-3回目): fi_count=11, total=8
+        #   nth(0)=main, nth(1)=tab, nth(2〜9)=sticker 01〜08
+        offset = 0
+        if fi_count > total and has_main and has_tab:
+            # main.pngをアップロード
+            try:
+                file_inputs.nth(0).set_input_files(str(main_file))
+                status.update("画像アップ", "main.png アップロードOK", 66)
+                time.sleep(1)
+            except Exception as e:
+                status.update("画像アップ", f"main.png 失敗: {e}")
+            # tab.pngをアップロード
+            try:
+                file_inputs.nth(1).set_input_files(str(tab_file))
+                status.update("画像アップ", "tab.png アップロードOK", 67)
+                time.sleep(1)
+            except Exception as e:
+                status.update("画像アップ", f"tab.png 失敗: {e}")
+            offset = 2  # スタンプ画像はnth(2)から
+
+        # スタンプ画像を各inputに1枚ずつ
         for i, stamp_file in enumerate(stamp_files):
             try:
-                file_inputs.nth(i).set_input_files(str(stamp_file))
+                file_inputs.nth(i + offset).set_input_files(str(stamp_file))
                 status.update("画像アップ", f"[{i+1}/{total}] {stamp_file.name} OK", 65 + int((i+1)/total*25))
                 time.sleep(1)
             except Exception as e:
