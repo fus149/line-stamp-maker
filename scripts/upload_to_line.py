@@ -13,6 +13,7 @@ from __future__ import annotations
 import json
 import re
 import time
+from datetime import datetime
 from pathlib import Path
 from typing import Optional
 
@@ -767,77 +768,138 @@ def fill_sticker_info(page: Page, title: str, description: str, status: UploadSt
 
 def submit_creation_form(page: Page, status: UploadStatus) -> bool:
     """新規登録フォームの「保存」ボタンをクリックし、編集ページに遷移する。
-    戻り値: 編集ページに到達したらTrue。"""
+    戻り値: 編集ページに到達したらTrue。
+
+    証拠(session bd0a2751):
+    - 「登録」で get_by_role("link", name="登録") がサイドバーの「新規登録」にマッチ → /create に誤遷移
+    - 保存ボタンはページ下部にあり、スクロールしないと見えない
+    対策:
+    - ページ下部にスクロールしてから探す
+    - サイドバー要素を除外（メインコンテンツ領域のみ検索）
+    - 「新規登録」を含む要素は除外
+    """
     status.update("フォーム送信", "フォームを保存中...", 55)
 
     url_before = page.url
 
-    # 保存ボタンを探してクリック
+    # ページ下部にスクロール（保存ボタンが画面外の可能性）
+    try:
+        page.evaluate("window.scrollTo(0, document.body.scrollHeight)")
+        time.sleep(1)
+    except Exception:
+        pass
+
+    status.save_screenshot(page, "07b_scrolled_bottom")
+
+    # デバッグ: ページ下部のボタン・リンクを全てログ
+    try:
+        bottom_elements = page.evaluate("""
+            (() => {
+                const results = [];
+                const all = document.querySelectorAll('button, input[type="submit"], a');
+                for (const el of all) {
+                    const rect = el.getBoundingClientRect();
+                    const text = (el.textContent || el.value || '').trim().replace(/\\n/g, ' ').slice(0, 50);
+                    const tag = el.tagName;
+                    const href = el.getAttribute('href') || '';
+                    const type = el.getAttribute('type') || '';
+                    // サイドバー要素を除外（左側250px以内はサイドバー）
+                    const inSidebar = rect.x < 250;
+                    if (text && rect.width > 0 && rect.height > 0 && !inSidebar) {
+                        results.push({tag, text, href, type, x: Math.round(rect.x), y: Math.round(rect.y)});
+                    }
+                }
+                return results;
+            })()
+        """)
+        for el in bottom_elements:
+            status.update("デバッグ", f"[メインコンテンツ] {el['tag']} \"{el['text']}\" href={el['href']} type={el['type']} pos=({el['x']},{el['y']})")
+    except Exception as e:
+        status.update("デバッグ", f"要素スキャン失敗: {e}")
+
     save_clicked = False
 
-    # 戦略1: テキストで探す（「保存」「次へ」「登録」）
-    for btn_text in ["保存", "次へ", "Save", "登録"]:
-        try:
-            locator = page.get_by_role("button", name=btn_text)
-            if locator.count() > 0:
-                locator.first.click()
-                status.update("フォーム送信", f"「{btn_text}」ボタンをクリック", 57)
-                save_clicked = True
-                break
-            # リンクとしても探す
-            locator = page.get_by_role("link", name=btn_text)
-            if locator.count() > 0:
-                locator.first.click()
-                status.update("フォーム送信", f"「{btn_text}」リンクをクリック", 57)
-                save_clicked = True
-                break
-        except Exception:
-            continue
+    # 戦略1（最優先）: JS でメインコンテンツ領域の保存系ボタンを探す
+    # サイドバー除外 + 「新規登録」除外 + ページ下半分を優先
+    try:
+        result = page.evaluate("""
+            (() => {
+                const all = document.querySelectorAll('button, input[type="submit"], a');
+                const keywords = ['保存', '次へ', 'Save', 'Next', 'Submit'];
+                // サイドバーのテキスト（除外対象）
+                const excludeTexts = ['新規登録', 'アイテム管理', 'LINE PRスタンプ', '送金申請',
+                    'メッセージセンター', 'アカウント設定', 'ガイドライン', '販売マニュアル',
+                    'Q&A', 'お知らせ', 'ログアウト', 'マイページ'];
 
-    # 戦略2: submit ボタン / input[type=submit]
+                // ページ下部から逆順に探す（保存ボタンはページ下部にある）
+                const reversed = Array.from(all).reverse();
+                for (const el of reversed) {
+                    const rect = el.getBoundingClientRect();
+                    if (rect.width === 0 || rect.height === 0) continue;
+                    // サイドバー除外（左端250px以内）
+                    if (rect.x < 250) continue;
+
+                    const text = (el.textContent || el.value || '').trim();
+                    // 除外テキスト
+                    if (excludeTexts.some(ex => text.includes(ex))) continue;
+
+                    for (const kw of keywords) {
+                        if (text.includes(kw)) {
+                            el.scrollIntoView({block: 'center'});
+                            el.click();
+                            return {text, tag: el.tagName, href: el.getAttribute('href') || '',
+                                    x: Math.round(rect.x), y: Math.round(rect.y)};
+                        }
+                    }
+                }
+                return null;
+            })()
+        """)
+        if result:
+            status.update("フォーム送信", f"保存ボタンクリック: {result}", 57)
+            save_clicked = True
+    except Exception as e:
+        status.update("デバッグ", f"JS保存ボタン検索失敗: {e}")
+
+    # 戦略2: input[type=submit] / button[type=submit]
     if not save_clicked:
         try:
             submit_btn = page.locator("input[type='submit'], button[type='submit']")
             if submit_btn.count() > 0:
+                submit_btn.first.scroll_into_view_if_needed()
                 submit_btn.first.click()
                 status.update("フォーム送信", "submitボタンをクリック", 57)
                 save_clicked = True
         except Exception:
             pass
 
-    # 戦略3: JSで保存・登録系のボタンを探す
+    # 戦略3: form要素のsubmit()を直接呼ぶ
     if not save_clicked:
         try:
-            result = page.evaluate("""
+            submitted = page.evaluate("""
                 (() => {
-                    const btns = document.querySelectorAll('button, input[type="submit"], a.btn, a[class*="button"]');
-                    const keywords = ['保存', '次へ', '登録', 'Save', 'Next', 'Submit'];
-                    for (const btn of btns) {
-                        const text = (btn.textContent || btn.value || '').trim();
-                        for (const kw of keywords) {
-                            if (text.includes(kw)) {
-                                btn.click();
-                                return {text: text, tag: btn.tagName};
-                            }
-                        }
+                    const form = document.querySelector('form');
+                    if (form) {
+                        form.submit();
+                        return true;
                     }
-                    return null;
+                    return false;
                 })()
             """)
-            if result:
-                status.update("フォーム送信", f"JSクリック: {result}", 57)
+            if submitted:
+                status.update("フォーム送信", "form.submit()を実行", 57)
                 save_clicked = True
         except Exception as e:
-            status.update("デバッグ", f"JS保存ボタン検索失敗: {e}")
+            status.update("デバッグ", f"form.submit()失敗: {e}")
 
     if not save_clicked:
         status.update("警告", "保存ボタンが見つかりません")
-        status.save_screenshot(page, "07b_no_save_button")
+        status.save_screenshot(page, "07c_no_save_button")
         status.dump_page_info(page, "保存ボタン未検出")
         return False
 
     # ページ遷移を待つ
-    time.sleep(3)
+    time.sleep(5)
     _wait_for_page_ready(page)
 
     # バリデーションエラーチェック
@@ -853,34 +915,28 @@ def submit_creation_form(page: Page, status: UploadStatus) -> bool:
                     visible_errors.append(text)
         if visible_errors:
             status.update("警告", f"バリデーションエラー: {'; '.join(visible_errors)}", 55)
-            status.save_screenshot(page, "07c_validation_error")
+            status.save_screenshot(page, "07d_validation_error")
     except Exception:
         pass
 
-    # URL変化確認
-    if page.url != url_before:
-        status.update("フォーム送信", f"ページ遷移成功: {page.url}", 60)
+    # URL変化確認（/sticker/create → /sticker/{id}/edit 等に変わるはず）
+    new_url = page.url
+    if new_url != url_before:
+        # /create に戻ってしまった場合は失敗（サイドバー誤クリック）
+        if new_url.endswith("/create") and "/sticker/" not in new_url:
+            status.update("警告", f"⚠️ /create に戻ってしまいました。サイドバー誤クリックの可能性")
+            page.go_back()
+            _wait_for_page_ready(page)
+            return False
+        status.update("フォーム送信", f"ページ遷移成功: {new_url}", 60)
         status.save_screenshot(page, "08_after_save")
         return True
 
-    # URLが変わらない場合 → まだ同じページ（エラーか、SPAでの遷移）
-    # ページ内容を確認
+    # URLが変わらない場合 → エラーかSPA遷移
     time.sleep(3)
     status.save_screenshot(page, "08_after_save")
-
-    # edit/upload 関連の要素が出現したか確認
-    has_edit_elements = page.locator(
-        "[class*='sticker'], [class*='upload'], [class*='edit'], "
-        "input[type='file'], [class*='stamp-item']"
-    ).count() > 0
-
-    if has_edit_elements:
-        status.update("フォーム送信", "編集ページ要素を検出", 60)
-        return True
-
-    status.update("フォーム送信", f"保存後のURL: {page.url}（変化なし）", 58)
     status.dump_page_info(page, "保存後")
-    return page.url != url_before
+    return False
 
 
 def upload_images(page: Page, output_dir: Path, status: UploadStatus):
@@ -1040,6 +1096,10 @@ def upload_to_line(
     if not stamp_files:
         status.update("エラー", f"{output_dir} にスタンプ画像が見つかりません")
         return False
+
+    # タイトルの一意性を確保（LINE Creators Marketは重複タイトルを拒否する）
+    timestamp = datetime.now().strftime("%m%d%H%M")
+    title = f"{title} {timestamp}"
 
     status.update("開始", f"スタンプ {len(stamp_files)}枚 / タイトル: {title}", 0)
 
