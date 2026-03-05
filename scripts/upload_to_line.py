@@ -277,66 +277,153 @@ def wait_for_login(page: Page, status: UploadStatus, timeout: int = 300) -> Opti
 
 def _dismiss_modals(page: Page, status: UploadStatus):
     """ダッシュボード上のモーダルポップアップ（キャンペーン告知等）を閉じる。"""
-    # まずJavaScriptで「閉じる」テキストを含むクリック可能要素を直接探してクリック
+
+    # デバッグ: ページ上の「閉じる」を含む要素を全てスキャン
+    try:
+        debug_info = page.evaluate("""
+            (() => {
+                const results = [];
+                const all = document.querySelectorAll('*');
+                for (const el of all) {
+                    // 直接のテキストノードに「閉じる」を含む要素のみ
+                    let directText = '';
+                    for (const node of el.childNodes) {
+                        if (node.nodeType === 3) directText += node.textContent;
+                    }
+                    directText = directText.trim();
+                    if (directText.includes('閉じる') || directText === 'Close') {
+                        const rect = el.getBoundingClientRect();
+                        results.push({
+                            tag: el.tagName,
+                            text: directText.slice(0, 30),
+                            class: (el.className?.toString() || '').slice(0, 80),
+                            href: el.getAttribute('href') || '',
+                            visible: rect.width > 0 && rect.height > 0,
+                            rect: {x: Math.round(rect.x), y: Math.round(rect.y),
+                                   w: Math.round(rect.width), h: Math.round(rect.height)}
+                        });
+                    }
+                }
+                return results;
+            })()
+        """)
+        for item in debug_info:
+            status.update("デバッグ", f"閉じる要素スキャン: {item}")
+    except Exception as e:
+        status.update("デバッグ", f"スキャンエラー: {e}")
+
+    # 方法1: Playwright get_by_text (部分一致ではなくexact, .lastで末尾=モーダル優先)
+    for exact in [True, False]:
+        try:
+            locator = page.get_by_text("閉じる", exact=exact)
+            count = locator.count()
+            status.update("デバッグ", f"get_by_text('閉じる', exact={exact}): {count}個")
+            if count > 0:
+                # 「今後、この画面を表示しない」チェックボックスを先にチェック
+                _check_dont_show_again(page, status)
+                # 末尾（モーダル内）の要素をクリック
+                target = locator.last
+                status.update("デバッグ", f"クリック対象: tag={target.evaluate('e => e.tagName')}, "
+                              f"text='{target.text_content().strip()[:30]}'")
+                target.click(force=True)
+                status.update("デバッグ", "「閉じる」クリック成功 (get_by_text)")
+                time.sleep(2)
+                return
+        except Exception as e:
+            status.update("デバッグ", f"get_by_text失敗 (exact={exact}): {e}")
+
+    # 方法2: get_by_role でボタン/リンクとして検索
+    for role in ["button", "link"]:
+        try:
+            locator = page.get_by_role(role, name="閉じる")
+            if locator.count() > 0:
+                _check_dont_show_again(page, status)
+                locator.last.click(force=True)
+                status.update("デバッグ", f"「閉じる」クリック成功 (role={role})")
+                time.sleep(2)
+                return
+        except Exception as e:
+            status.update("デバッグ", f"get_by_role({role})失敗: {e}")
+
+    # 方法3: JavaScript - getBoundingClientRect で可視判定（offsetParent問題を回避）
     try:
         closed = page.evaluate("""
             (() => {
-                // 「閉じる」「Close」テキストを持つ要素を探す
-                const candidates = document.querySelectorAll('a, button, [role="button"], span[onclick], div[onclick]');
-                for (const el of candidates) {
-                    const text = (el.textContent || '').trim();
-                    if ((text === '閉じる' || text === 'Close' || text === '✕' || text === '×') &&
-                        el.offsetParent !== null) {
-                        el.click();
-                        return text;
+                const all = document.querySelectorAll('a, button, [role="button"], span, div');
+                // 逆順（DOMの末尾=モーダル優先）
+                const reversed = Array.from(all).reverse();
+                for (const el of reversed) {
+                    let directText = '';
+                    for (const node of el.childNodes) {
+                        if (node.nodeType === 3) directText += node.textContent;
                     }
-                }
-                // モーダルの閉じるボタン（class名ベース）
-                const closeBtn = document.querySelector(
-                    '.modal-close, [class*="close"], [class*="dismiss"], [aria-label="Close"], [aria-label="閉じる"]'
-                );
-                if (closeBtn && closeBtn.offsetParent !== null) {
-                    closeBtn.click();
-                    return 'class-based close';
+                    directText = directText.trim();
+                    if (directText.includes('閉じる') || directText === 'Close') {
+                        const rect = el.getBoundingClientRect();
+                        if (rect.width > 0 && rect.height > 0) {
+                            el.click();
+                            return {tag: el.tagName, text: directText, x: rect.x, y: rect.y};
+                        }
+                    }
                 }
                 return null;
             })()
         """)
         if closed:
-            status.update("デバッグ", f"モーダルをJSで閉じました: {closed}")
+            status.update("デバッグ", f"JSクリック成功: {closed}")
             time.sleep(2)
             return
     except Exception as e:
-        status.update("デバッグ", f"JSモーダル閉じ試行エラー: {e}")
+        status.update("デバッグ", f"JSクリック失敗: {e}")
 
-    # フォールバック: Playwrightセレクタで試行（button + a タグ両方）
-    close_selectors = [
-        "a:has-text('閉じる')",
-        "button:has-text('閉じる')",
-        "a:has-text('Close')",
-        "button:has-text('Close')",
-        "button.modal-close",
-        "[class*='modal'] a",
-        "[class*='modal'] button",
-        "[class*='dialog'] a:has-text('閉じる')",
-        "[class*='overlay'] a:has-text('閉じる')",
-    ]
-    for sel in close_selectors:
-        try:
-            btn = page.locator(sel).first
-            if btn.is_visible(timeout=1000):
-                btn.click(force=True)
-                status.update("デバッグ", f"モーダルを閉じました: {sel}")
-                time.sleep(2)
-                return
-        except Exception:
-            continue
+    # 方法4: 座標クリック - ページ中央下部付近の「閉じる」ボタン位置を推定
+    try:
+        info = page.evaluate("""
+            (() => {
+                const all = document.querySelectorAll('a, button, [role="button"], span, div');
+                const reversed = Array.from(all).reverse();
+                for (const el of reversed) {
+                    const text = (el.textContent || '').trim();
+                    if (text.includes('閉じる') && text.length < 20) {
+                        const rect = el.getBoundingClientRect();
+                        if (rect.width > 0 && rect.height > 0) {
+                            return {x: rect.x + rect.width / 2, y: rect.y + rect.height / 2};
+                        }
+                    }
+                }
+                return null;
+            })()
+        """)
+        if info:
+            status.update("デバッグ", f"座標クリック: x={info['x']}, y={info['y']}")
+            page.mouse.click(info["x"], info["y"])
+            time.sleep(2)
+            return
+    except Exception as e:
+        status.update("デバッグ", f"座標クリック失敗: {e}")
 
-    # 最終手段: Escキーを押してモーダルを閉じる
+    # 方法5: Escapeキー
     try:
         page.keyboard.press("Escape")
-        status.update("デバッグ", "Escキーでモーダル閉じを試行")
+        status.update("デバッグ", "Escキー試行")
         time.sleep(1)
+    except Exception:
+        pass
+
+    status.update("デバッグ", "モーダル閉じ: 全方法失敗")
+
+
+def _check_dont_show_again(page: Page, status: UploadStatus):
+    """「今後、この画面を表示しない」チェックボックスがあればチェック。"""
+    try:
+        cb = page.locator("input[type='checkbox']")
+        for i in range(cb.count()):
+            el = cb.nth(i)
+            if el.is_visible(timeout=500):
+                el.check(force=True)
+                status.update("デバッグ", "「今後表示しない」チェックボックスをチェック")
+                time.sleep(0.5)
+                return
     except Exception:
         pass
 
@@ -439,14 +526,26 @@ def navigate_to_new_sticker(page: Page, status: UploadStatus) -> bool:
         status.save_screenshot(page, "03_dashboard_fail")
         return False
 
-    # モーダルを閉じる（複数回試行）
-    for attempt in range(3):
-        _dismiss_modals(page, status)
-        time.sleep(1)
-
-    # ページ完全読み込みを待つ
+    # モーダルを閉じる（最大5回試行、閉じたことを確認するまで繰り返す）
     _wait_for_page_ready(page)
-    time.sleep(1)
+    time.sleep(2)  # モーダル表示完了を待つ
+
+    for attempt in range(5):
+        # モーダルが存在するか確認
+        modal_exists = False
+        try:
+            close_count = page.get_by_text("閉じる", exact=True).count()
+            modal_exists = close_count > 0
+        except Exception:
+            pass
+
+        if not modal_exists:
+            status.update("デバッグ", f"モーダルなし（試行{attempt + 1}回目）")
+            break
+
+        status.update("デバッグ", f"モーダル検出、閉じ試行 {attempt + 1}/5")
+        _dismiss_modals(page, status)
+        time.sleep(2)  # 閉じアニメーション完了を待つ
 
     status.save_screenshot(page, "03_dashboard")
     status.dump_page_info(page, "ダッシュボード")
@@ -711,10 +810,12 @@ def upload_to_line(
                 return False
             page = logged_in_page
 
-            # Step 2: モーダルを閉じる（複数回試行）
-            time.sleep(2)  # ダッシュボード描画完了を待つ
+            # Step 2: ダッシュボード表示後の初期モーダル閉じ
+            time.sleep(3)  # ダッシュボード + モーダル表示完了を待つ
+            status.save_screenshot(page, "02b_before_modal_dismiss")
             _dismiss_modals(page, status)
-            status.save_screenshot(page, "02b_after_modal_dismiss")
+            time.sleep(2)
+            status.save_screenshot(page, "02c_after_modal_dismiss")
 
             # Step 3: スタンプ作成ページへ遷移（最大2回リトライ）
             sticker_page_reached = False
