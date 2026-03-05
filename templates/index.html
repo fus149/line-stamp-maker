@@ -4,7 +4,7 @@
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
   <title>LINEスタンプ自動でつくるくん</title>
-  <link rel="stylesheet" href="/static/css/style.css?v=2" />
+  <link rel="stylesheet" href="/static/css/style.css?v=3" />
 </head>
 <body>
   <div class="app">
@@ -187,20 +187,21 @@
             </div>
           </div>
 
-          <!-- 審査リクエスト待機中 -->
+          <!-- 自動処理待機中 -->
           <div id="line-waiting" hidden>
             <div style="text-align: center; padding: 2rem 1rem;">
               <div style="font-size: 64px; margin-bottom: 1rem;">
                 <span class="waiting-animation">🐾</span>
               </div>
               <h3 style="font-size: 1.3rem; margin-bottom: 0.5rem; color: #333;">スタンプ完成までもう少し！</h3>
-              <p class="panel-desc" style="margin-bottom: 1.5rem;">
-                画像のアップロードが完了しました。<br/>
-                審査リクエストを自動送信しています...<br/>
+              <p class="panel-desc" style="margin-bottom: 0.5rem;">
                 <strong>このページはそのままでお待ちください。</strong>
               </p>
+              <p class="panel-desc" id="line-waiting-status" style="margin-bottom: 1.5rem; color: #555;">
+                自動登録を進めています...
+              </p>
               <div class="progress-bar" style="max-width: 300px; margin: 0 auto;">
-                <div class="progress-fill" id="line-waiting-progress" style="width: 95%; transition: width 0.5s;"></div>
+                <div class="progress-fill" id="line-waiting-progress" style="width: 22%; transition: width 0.5s;"></div>
               </div>
               <p class="panel-desc" style="margin-top: 1rem; font-size: 0.85rem; color: #999;">
                 ブラウザは裏で作業中です。閉じないでください。
@@ -347,6 +348,6 @@
     </footer>
   </div>
 
-  <script src="/static/js/app.js?v=2"></script>
+  <script src="/static/js/app.js?v=3"></script>
 </body>
 </html>

@@ -1704,6 +1704,10 @@ def upload_to_line(
                 return False
             page = logged_in_page
 
+            # ログイン完了 → ブラウザを最小化してバックグラウンド処理に移行
+            status.update("自動処理中", "ログイン完了！スタンプを自動登録しています。このページはそのままでお待ちください...", 22)
+            _minimize_browser(page, status)
+
             # Step 2: ダッシュボード表示後の初期モーダル閉じ
             time.sleep(3)  # ダッシュボード + モーダル表示完了を待つ
             status.save_screenshot(page, "02b_before_modal_dismiss")
@@ -1757,10 +1761,7 @@ def upload_to_line(
 
             # Step 7: 審査リクエスト送信（バックグラウンドで進行）
             # 画像アップロード完了をユーザーに通知し、審査リクエストは裏で進める
-            status.update("審査準備中", "画像アップロード完了！審査リクエストを自動送信中です。このページでお待ちください...", 95)
-
-            # ブラウザを最小化して裏で作業（ユーザーにはWebアプリの待機画面だけ見せる）
-            _minimize_browser(page, status)
+            status.update("審査準備中", "画像アップロード完了！審査リクエストを自動送信しています...", 95)
 
             _submit_review_request(page, status)
 

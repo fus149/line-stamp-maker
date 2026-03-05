@@ -471,16 +471,21 @@ function startStatusPolling() {
         logsEl.scrollTop = logsEl.scrollHeight;
       }
 
-      // 審査準備中 → 待機画面に切り替え
-      if (data.step === "審査準備中" || data.step === "審査リクエスト") {
+      // ログイン完了後 → 待機画面に切り替え
+      const waitingSteps = ["自動処理中", "ページ遷移", "情報入力", "フォーム送信", "画像アップ", "審査準備中", "審査リクエスト"];
+      if (waitingSteps.includes(data.step)) {
         const uploading = $("#line-uploading");
         const waiting = $("#line-waiting");
         if (uploading) uploading.hidden = true;
         if (waiting) waiting.hidden = false;
-        // 待機画面のプログレスバーも更新
+        // 待機画面のプログレスバーとステータステキスト更新
         const waitProgress = $("#line-waiting-progress");
         if (waitProgress) {
-          waitProgress.style.width = (data.progress || 95) + "%";
+          waitProgress.style.width = (data.progress || 25) + "%";
+        }
+        const waitStatus = $("#line-waiting-status");
+        if (waitStatus) {
+          waitStatus.textContent = data.message || "処理中...";
         }
       }
 
