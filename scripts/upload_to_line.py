@@ -87,23 +87,28 @@ class UploadStatus:
 # ページ状態判定ヘルパー
 # ============================================================
 
-def _minimize_browser(page: Page, status: UploadStatus):
-    """Chromiumブラウザウィンドウを最小化する。
-    画像アップロード完了後、ユーザーにはWebアプリの待機画面だけ見せるために使用。
-    CDP (Chrome DevTools Protocol) でウィンドウを最小化する。
+def _hide_browser(page: Page, status: UploadStatus):
+    """Chromiumブラウザウィンドウを画面外に移動して隠す。
+    ログイン完了後、ユーザーにはWebアプリの待機画面だけ見せるために使用。
+    CDP (Chrome DevTools Protocol) でウィンドウを画面外へ移動する。
     """
     try:
         cdp = page.context.new_cdp_session(page)
         window = cdp.send("Browser.getWindowForTarget")
         window_id = window["windowId"]
+        # まず normal 状態にしてから画面外へ移動（最小化状態だと bounds 変更不可）
         cdp.send("Browser.setWindowBounds", {
             "windowId": window_id,
-            "bounds": {"windowState": "minimized"}
+            "bounds": {"windowState": "normal"}
+        })
+        cdp.send("Browser.setWindowBounds", {
+            "windowId": window_id,
+            "bounds": {"left": -9999, "top": -9999, "width": 800, "height": 600}
         })
         cdp.detach()
-        status.update("デバッグ", "ブラウザを最小化しました")
+        status.update("デバッグ", "ブラウザを裏に移動しました")
     except Exception as e:
-        status.update("デバッグ", f"ブラウザ最小化失敗（動作に影響なし）: {e}")
+        status.update("デバッグ", f"ブラウザ非表示失敗（動作に影響なし）: {e}")
 
 
 def _wait_for_page_ready(page: Page, timeout: int = 10):
@@ -1706,7 +1711,7 @@ def upload_to_line(
 
             # ログイン完了 → ブラウザを最小化してバックグラウンド処理に移行
             status.update("自動処理中", "ログイン完了！スタンプを自動登録しています。このページはそのままでお待ちください...", 22)
-            _minimize_browser(page, status)
+            _hide_browser(page, status)
 
             # Step 2: ダッシュボード表示後の初期モーダル閉じ
             time.sleep(3)  # ダッシュボード + モーダル表示完了を待つ
