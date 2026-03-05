@@ -101,8 +101,24 @@ def _wait_for_page_ready(page: Page, timeout: int = 10):
 
 
 def _is_on_dashboard(page: Page) -> bool:
-    """ダッシュボード（/my/配下）にいるか判定。"""
-    return "/my/" in page.url
+    """ダッシュボード（/my/配下のアイテム一覧ページ）にいるか判定。
+    証拠(session 8a2f7dad-2回目):
+    - /my/{userId}/sticker/43339793/update はスタンプ編集ページ
+    - /my/ を含むが、ダッシュボードではない
+    - ダッシュボード = /my/{userId}/sticker/ (一覧ページ)
+    """
+    url = page.url
+    if "/my/" not in url:
+        return False
+    # スタンプ/絵文字/着せかえの個別ページは除外
+    # 例: /sticker/43339793 や /sticker/43339793/update
+    if re.search(r"/sticker/\d+", url):
+        return False
+    if re.search(r"/emoji/\d+", url):
+        return False
+    if re.search(r"/theme/\d+", url):
+        return False
+    return True
 
 
 def _is_on_login_page(url: str) -> bool:
@@ -143,19 +159,24 @@ def _find_dashboard_page(context: BrowserContext, status: UploadStatus) -> Optio
     for p in all_pages:
         try:
             url = p.url
-            # ダッシュボードに直接いるページ
-            if "/my/" in url:
+            # ダッシュボードに直接いるページ（_is_on_dashboardで厳密判定）
+            if _is_on_dashboard(p):
                 status.update("ログイン", f"ダッシュボード検出: {url[:100]}", 20)
                 return p
+            # /my/ 配下だがダッシュボードではないページ（スタンプ編集ページ等）
+            # → creator.line.me にいるページとして記録（後でリダイレクト試行）
+            if "/my/" in url:
+                status.update("ログイン", f"/my/配下検出（ダッシュボード以外）: {url[:100]}", 18)
+                creator_page = p
             # creator.line.me にいるページ（ログインページ以外）を記録
-            if _is_on_creator_site(url) and "/signup/" not in url:
+            elif _is_on_creator_site(url) and "/signup/" not in url:
                 creator_page = p
             # OAuth コールバック中のページ
             if "/signup/line_callback" in url:
                 status.update("ログイン", f"OAuthコールバック検出", 15)
                 try:
                     p.wait_for_url(lambda u: "/my/" in u or (_is_on_creator_site(u) and "/signup/" not in u), timeout=15000)
-                    if "/my/" in p.url:
+                    if _is_on_dashboard(p):
                         return p
                     creator_page = p
                 except PwTimeout:
@@ -318,14 +339,27 @@ def _dismiss_modals(page: Page, status: UploadStatus):
     # 「今後、この画面を表示しない」チェックボックスを先にチェック
     _check_dont_show_again(page, status)
 
-    # 方法1: Playwright get_by_text (.lastで末尾=モーダル優先)
+    # 方法1: Playwright get_by_text（可視の要素のみクリック）
+    # 証拠(session 8a2f7dad-2回目): .lastが不可視の background-overlay を掴む
     for exact in [True, False]:
         try:
             locator = page.get_by_text("閉じる", exact=exact)
             count = locator.count()
             status.update("デバッグ", f"get_by_text('閉じる', exact={exact}): {count}個")
             if count > 0:
-                target = locator.last
+                # 可視の要素を後ろから探す（モーダル優先）
+                target = None
+                for ci in range(count - 1, -1, -1):
+                    candidate = locator.nth(ci)
+                    try:
+                        if candidate.is_visible(timeout=500):
+                            target = candidate
+                            break
+                    except Exception:
+                        continue
+                if target is None:
+                    status.update("デバッグ", f"可視の「閉じる」なし (exact={exact})")
+                    continue
                 tag = target.evaluate("e => e.tagName")
                 text = target.text_content().strip()[:30]
                 status.update("デバッグ", f"クリック対象: tag={tag}, text='{text}'")
@@ -521,11 +555,23 @@ def navigate_to_new_sticker(page: Page, status: UploadStatus) -> bool:
     time.sleep(2)  # モーダル表示完了を待つ
 
     for attempt in range(5):
-        # モーダルが存在するか確認
+        # モーダルが存在するか確認（可視の「閉じる」ボタンのみカウント）
+        # 証拠(session 8a2f7dad-2回目): 不可視の「閉じる」(rect:0,0,0,0)で無限ループ
         modal_exists = False
         try:
-            close_count = page.get_by_text("閉じる", exact=True).count()
-            modal_exists = close_count > 0
+            close_locator = page.get_by_text("閉じる", exact=True)
+            close_count = close_locator.count()
+            # 可視のもののみカウント
+            visible_count = 0
+            for ci in range(close_count):
+                try:
+                    if close_locator.nth(ci).is_visible(timeout=500):
+                        visible_count += 1
+                except Exception:
+                    pass
+            modal_exists = visible_count > 0
+            if close_count > 0 and visible_count == 0:
+                status.update("デバッグ", f"「閉じる」{close_count}個あるが全て不可視 → スキップ")
         except Exception:
             pass
 
