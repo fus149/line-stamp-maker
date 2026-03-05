@@ -1,6 +1,7 @@
 input_images/
 output/
 sessions/
+.browser_data/
 .env
 
 # Python

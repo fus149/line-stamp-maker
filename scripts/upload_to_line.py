@@ -294,6 +294,28 @@ def _extract_user_path(page: Page) -> Optional[str]:
     return None
 
 
+def _dismiss_modals(page: Page, status: UploadStatus):
+    """ダッシュボード上のモーダルポップアップ（キャンペーン告知等）を閉じる。"""
+    close_selectors = [
+        "button:has-text('閉じる')",
+        "button:has-text('Close')",
+        "button.modal-close",
+        "[class*='modal'] button",
+        "[class*='dialog'] button:has-text('閉じる')",
+        "[class*='overlay'] button:has-text('閉じる')",
+    ]
+    for sel in close_selectors:
+        try:
+            btn = page.locator(sel).first
+            if btn.is_visible(timeout=1000):
+                btn.click()
+                status.update("デバッグ", f"モーダルを閉じました: {sel}")
+                time.sleep(1)
+                return
+        except Exception:
+            continue
+
+
 def navigate_to_new_sticker(page: Page, status: UploadStatus) -> bool:
     """スタンプ新規作成ページに遷移する。"""
     status.update("ページ遷移", f"新規登録ページに移動中... 現在URL: {page.url[:100]}", 25)
@@ -581,14 +603,18 @@ def upload_to_line(
 
     status.update("開始", f"スタンプ {len(stamp_files)}枚 / タイトル: {title}", 0)
 
+    # 永続的なブラウザプロファイルを使用（ログインセッションが保存される）
+    project_root = Path(__file__).resolve().parent.parent
+    user_data_dir = project_root / ".browser_data"
+    user_data_dir.mkdir(exist_ok=True)
+
     with sync_playwright() as p:
-        browser = p.chromium.launch(
+        context = p.chromium.launch_persistent_context(
+            user_data_dir=str(user_data_dir),
             headless=False,
-            args=["--start-maximized"],
-        )
-        context = browser.new_context(
             locale="ja-JP",
             no_viewport=True,
+            args=["--start-maximized"],
         )
         page = context.new_page()
 
@@ -600,7 +626,10 @@ def upload_to_line(
             # ログイン後のページを使う（元のpageとは異なる場合がある）
             page = logged_in_page
 
-            # Step 2: スタンプ作成ページへ遷移
+            # Step 2: モーダルポップアップがあれば閉じる
+            _dismiss_modals(page, status)
+
+            # Step 3: スタンプ作成ページへ遷移
             if not navigate_to_new_sticker(page, status):
                 status.update("警告", "自動遷移に失敗。手動で操作してください。")
                 if interactive:
@@ -646,7 +675,7 @@ def upload_to_line(
             status.save_screenshot(page, "99_exception")
             return False
         finally:
-            browser.close()
+            context.close()
 
 
 if __name__ == "__main__":
