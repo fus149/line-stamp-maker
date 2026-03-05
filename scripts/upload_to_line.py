@@ -117,9 +117,61 @@ def _is_logged_in_by_elements(page: Page) -> bool:
     return False
 
 
-def wait_for_login(page: Page, status: UploadStatus, timeout: int = 300) -> bool:
-    """ユーザーがログインするまで待機。"""
-    status.update("ログイン", "LINEアカウントでログインしてください。", 5)
+def _find_logged_in_page(context, status: UploadStatus) -> Optional[Page]:
+    """コンテキスト内の全ページをスキャンし、ログイン済みのページを探す。
+
+    OAuth ログイン後、元のページにリダイレクトされる場合もあれば、
+    新しいタブやポップアップが開く場合もある。全ページを確認する。
+    """
+    all_pages = context.pages
+    if len(all_pages) > 1:
+        status.update("デバッグ", f"コンテキスト内のページ数: {len(all_pages)}")
+
+    for p in all_pages:
+        try:
+            url = p.url
+            # ダッシュボードにいるページを発見
+            if "/my/" in url:
+                status.update("ログイン", f"ダッシュボードページ発見: {url[:100]}", 20)
+                return p
+
+            # creator.line.me にいる（ログインページではない）
+            if "creator.line.me" in url and "access.line.me" not in url:
+                _wait_for_page_ready(p)
+                if _is_logged_in_by_elements(p):
+                    status.update("ログイン", f"ログイン済みページ発見: {url[:100]}", 20)
+                    return p
+
+            # OAuth コールバック中のページ
+            if "/signup/line_callback" in url:
+                status.update("ログイン", f"OAuth コールバック中のページ発見: {url[:80]}", 15)
+                # コールバック完了を少し待つ
+                try:
+                    p.wait_for_url(lambda u: "/my/" in u or ("creator.line.me" in u and "access.line.me" not in u and "/signup/" not in u), timeout=15000)
+                    return p
+                except PwTimeout:
+                    pass
+        except Exception:
+            continue
+    return None
+
+
+def wait_for_login(page: Page, status: UploadStatus, timeout: int = 300) -> Optional[Page]:
+    """ユーザーがログインするまで待機。ログイン後のページを返す（新しいタブの場合もある）。
+    失敗時はNoneを返す。"""
+    status.update("ログイン", "Playwrightブラウザが開きます。そのブラウザでLINEにログインしてください。", 5)
+
+    context = page.context
+
+    # 新しいページ（ポップアップ・タブ）が開いたら記録する
+    new_pages: list[Page] = []
+
+    def on_new_page(new_page: Page):
+        url = new_page.url or "(loading)"
+        status.update("デバッグ", f"新しいタブ/ポップアップ検出: {url[:100]}")
+        new_pages.append(new_page)
+
+    context.on("page", on_new_page)
 
     # LINE OAuth ログインページに直接アクセス
     page.goto(LOGIN_URL, timeout=30000)
@@ -127,63 +179,74 @@ def wait_for_login(page: Page, status: UploadStatus, timeout: int = 300) -> bool
 
     status.save_screenshot(page, "01_login_page")
 
-    # 既にログイン済みか確認
+    # 既にログイン済みか確認（リダイレクトでダッシュボードに飛んだ場合）
     if _is_on_dashboard(page):
         status.update("ログイン", "既にログイン済みです。", 15)
-        return True
+        return page
 
-    status.update("ログイン", f"ログイン待機中... ({timeout}秒以内にログインしてください)", 10)
+    # creator.line.me のトップにリダイレクトされた場合
+    if "creator.line.me" in page.url and "access.line.me" not in page.url:
+        if _is_logged_in_by_elements(page):
+            status.update("ログイン", "既にログイン済みです。", 15)
+            return page
 
-    last_url = ""
+    status.update("ログイン", f"⚠️ 新しく開いたブラウザウィンドウ（Chromium）でログインしてください（{timeout}秒以内）", 10)
+
+    last_urls: dict[int, str] = {}
     elapsed = 0
     interval = 3
     while elapsed < timeout:
         time.sleep(interval)
         elapsed += interval
 
-        current_url = page.url
+        # 全ページの URL を確認（新しいタブやポップアップも含む）
+        for p in context.pages:
+            try:
+                pid = id(p)
+                current_url = p.url
+                prev_url = last_urls.get(pid, "")
 
-        # URLが変わったらログに記録
-        if current_url != last_url:
-            status.update("ログイン", f"URL変化: {current_url[:100]}", 10)
-            last_url = current_url
+                if current_url != prev_url:
+                    status.update("ログイン", f"URL変化 (page {pid % 1000}): {current_url[:100]}", 10)
+                    last_urls[pid] = current_url
+            except Exception:
+                continue
 
-        # チェック1: /my/ 配下にいる ＝ ダッシュボード到達
-        if "/my/" in current_url:
-            _wait_for_page_ready(page)
-            status.update("ログイン", "ログイン完了！（ダッシュボードURL検出）", 20)
-            status.save_screenshot(page, "02_login_done")
-            return True
+        # 全ページからログイン済みのものを探す
+        logged_in_page = _find_logged_in_page(context, status)
+        if logged_in_page:
+            _wait_for_page_ready(logged_in_page)
+            status.update("ログイン", "ログイン完了！", 20)
+            status.save_screenshot(logged_in_page, "02_login_done")
 
-        # チェック2: OAuth コールバック中 → リダイレクト待ち
-        if "/signup/line_callback" in current_url:
-            status.update("ログイン", "認証処理中...", 15)
-            time.sleep(5)
-            continue
+            # ダッシュボードにいない場合、マイページリンクで移動
+            if "/my/" not in logged_in_page.url:
+                try:
+                    mypage_link = logged_in_page.locator("a[href*='/my/'], a:has-text('マイページ')").first
+                    if mypage_link.is_visible(timeout=2000):
+                        mypage_link.click()
+                        time.sleep(3)
+                        _wait_for_page_ready(logged_in_page)
+                        status.update("ログイン", f"マイページに遷移: {logged_in_page.url[:100]}", 20)
+                except Exception:
+                    pass
+            return logged_in_page
 
-        # チェック3: creator.line.me にいる場合（/ja/ トップ等にリダイレクトされた可能性）
-        # access.line.me（ログイン画面）以外の creator.line.me ならページ要素でログイン判定
-        if "creator.line.me" in current_url and "access.line.me" not in current_url:
-            _wait_for_page_ready(page)
-            if _is_logged_in_by_elements(page):
-                status.update("ログイン", "ログイン完了！（ページ要素で検出）", 20)
-                status.save_screenshot(page, "02_login_done")
-                # ダッシュボードにいない場合、ナビの「マイページ」リンクをクリックして移動
-                if "/my/" not in current_url:
-                    try:
-                        mypage_link = page.locator("a[href*='/my/'], a:has-text('マイページ')").first
-                        if mypage_link.is_visible(timeout=2000):
-                            mypage_link.click()
-                            time.sleep(3)
-                            _wait_for_page_ready(page)
-                            status.update("ログイン", f"マイページに遷移: {page.url[:100]}", 20)
-                    except Exception:
-                        pass
-                return True
+        # 30秒ごとにリマインド
+        if elapsed % 30 == 0 and elapsed < timeout:
+            remaining = timeout - elapsed
+            status.update("ログイン", f"⚠️ Chromiumブラウザでログインしてください（残り{remaining}秒）", 10)
 
-    status.update("エラー", f"タイムアウト: ログインが完了しませんでした。最終URL: {page.url[:100]}")
+    # タイムアウト - 最終状態をログに記録
+    status.update("エラー", f"タイムアウト: ログインが完了しませんでした。")
+    status.update("デバッグ", f"最終ページ数: {len(context.pages)}")
+    for i, p in enumerate(context.pages):
+        try:
+            status.update("デバッグ", f"  Page[{i}] URL: {p.url[:100]}")
+        except Exception:
+            status.update("デバッグ", f"  Page[{i}] (closed)")
     status.save_screenshot(page, "02_login_timeout")
-    return False
+    return None
 
 
 def _extract_user_path(page: Page) -> Optional[str]:
@@ -495,9 +558,12 @@ def upload_to_line(
         page = context.new_page()
 
         try:
-            # Step 1: ログイン
-            if not wait_for_login(page, status):
+            # Step 1: ログイン（ログイン後のページが返る。新しいタブの場合もある）
+            logged_in_page = wait_for_login(page, status)
+            if logged_in_page is None:
                 return False
+            # ログイン後のページを使う（元のpageとは異なる場合がある）
+            page = logged_in_page
 
             # Step 2: スタンプ作成ページへ遷移
             if not navigate_to_new_sticker(page, status):
