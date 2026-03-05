@@ -533,8 +533,19 @@ def _classify_file_inputs(page: Page, fi_count: int, status: UploadStatus) -> di
             accept = item.get("accept", "")
             parent = item.get("parentText", "")
 
-            # ZIP用input判定
+            # ZIP用 or 画像以外のinput判定
+            # 証拠(session 9d8295be): index 0 は accept='', cls='mdBtn mdBtnLabel'
+            # → ZIPアップロードボタンだがacceptが空文字
             if ".zip" in accept or "zip" in accept.lower():
+                result["zip"] = idx
+                continue
+            # accept属性がimage/pngでない場合はスキップ（ZIP等の非画像input）
+            if accept and "image" not in accept:
+                result["zip"] = idx
+                continue
+            if not accept and not parent:
+                # accept属性もラベルもない → ZIPボタン等の非画像input
+                status.update("デバッグ", f"input[{idx}] スキップ: accept='{accept}', parent='{parent}'")
                 result["zip"] = idx
                 continue
 
@@ -545,7 +556,7 @@ def _classify_file_inputs(page: Page, fi_count: int, status: UploadStatus) -> di
             elif "tab" in lower_parent or "タブ" in parent or "トークルーム" in parent:
                 result["tab"] = idx
             else:
-                # 番号付きスタンプスロット or その他画像input
+                # 番号付きスタンプスロット
                 result["stickers"].append(idx)
 
         # main/tabが見つからない場合、stickersの先頭2つをmain/tabとして使う
