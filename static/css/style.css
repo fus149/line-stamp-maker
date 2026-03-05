@@ -504,17 +504,98 @@ a:hover { text-decoration: underline; }
   margin-top: 1rem;
 }
 
-.line-upload-status {
-  text-align: center;
-  padding: 1.5rem;
-  background: var(--green-light);
+/* LINE Flow Card */
+.line-flow-card {
+  background: var(--surface);
+  border: 1px solid var(--border);
   border-radius: var(--radius-lg);
+  padding: 1.5rem;
   margin-top: 1rem;
 }
-
-.line-upload-status p {
-  font-weight: 600;
+.line-flow-title {
+  font-size: 1.15rem;
+  color: var(--text);
+  margin-bottom: 0.3rem;
+  text-align: center;
+}
+.line-flow-desc {
+  font-size: 0.9rem;
+  color: var(--text-sub);
+  text-align: center;
+  margin: 0;
+  line-height: 1.6;
+}
+.line-flow-note {
+  background: var(--green-light);
+  border-radius: var(--radius);
+  padding: 0.7rem 1rem;
+  margin-top: 1rem;
+  text-align: center;
+}
+.line-flow-note p {
+  font-size: 0.85rem;
   color: var(--green-dark);
+  margin: 0;
+}
+
+/* LINE Flow Steps (horizontal stepper) */
+.line-flow-steps {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 0;
+  margin-bottom: 1.5rem;
+}
+.line-flow-step {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 0.3rem;
+  font-size: 0.75rem;
+  color: #ccc;
+}
+.line-flow-step-icon {
+  width: 32px;
+  height: 32px;
+  border-radius: 50%;
+  background: #e5e7eb;
+  color: #999;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-weight: 700;
+  font-size: 0.85rem;
+}
+.line-flow-step.active {
+  color: var(--green-dark);
+}
+.line-flow-step.active .line-flow-step-icon {
+  background: var(--green);
+  color: #fff;
+  box-shadow: 0 0 0 4px var(--green-light);
+}
+.line-flow-step.done {
+  color: var(--green-dark);
+}
+.line-flow-step.done .line-flow-step-icon {
+  background: var(--green);
+  color: #fff;
+}
+.line-flow-step-line {
+  width: 40px;
+  height: 2px;
+  background: #e5e7eb;
+  margin: 0 0.2rem;
+  margin-bottom: 1.2rem;
+}
+.line-flow-step-line.done {
+  background: var(--green);
+}
+
+/* Login prompt */
+.line-login-prompt {
+  text-align: center;
+  padding: 1rem 0;
 }
 
 .result-hint {

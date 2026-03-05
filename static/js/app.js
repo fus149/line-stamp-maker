@@ -418,6 +418,9 @@ function initLineUpload() {
     const title = $("#stamp-title").value.trim() || "ペットスタンプ";
     const desc = $("#stamp-desc").value.trim() || "かわいいペットのスタンプです";
 
+    // 通知パーミッションをリクエスト（初回のみ）
+    requestNotificationPermission();
+
     $("#line-upload-form").hidden = true;
     $("#line-uploading").hidden = false;
 
@@ -489,7 +492,7 @@ function startStatusPolling() {
         }
       }
 
-      // 完了 → 完了画面に切り替え
+      // 完了 → 完了画面に切り替え + 通知
       if (data.step === "完了") {
         clearInterval(statusPollTimer);
         statusPollTimer = null;
@@ -500,6 +503,7 @@ function startStatusPolling() {
         if (waiting) waiting.hidden = true;
         if (complete) complete.hidden = false;
         loadDebugScreenshots();
+        notifyComplete();
       }
 
       // エラー・中断 → ポーリング停止、進行状況画面のまま表示
@@ -543,6 +547,64 @@ async function loadDebugScreenshots() {
     }
   } catch (e) {
     // ignore
+  }
+}
+
+// --- 完了通知 ---
+function notifyComplete() {
+  // ブラウザ通知
+  if ("Notification" in window && Notification.permission === "granted") {
+    try {
+      new Notification("🐾 スタンプ登録完了！", {
+        body: "LINE Creators Marketへの登録が完了しました。審査をお待ちください。",
+        icon: "/static/img/favicon.png",
+        tag: "stamp-complete",
+      });
+    } catch (e) {
+      // 通知がサポートされていない環境
+    }
+  }
+
+  // 音で通知（短いビープ音を生成）
+  try {
+    const audioCtx = new (window.AudioContext || window.webkitAudioContext)();
+    const playTone = (freq, start, dur) => {
+      const osc = audioCtx.createOscillator();
+      const gain = audioCtx.createGain();
+      osc.connect(gain);
+      gain.connect(audioCtx.destination);
+      osc.frequency.value = freq;
+      osc.type = "sine";
+      gain.gain.setValueAtTime(0.3, audioCtx.currentTime + start);
+      gain.gain.exponentialRampToValueAtTime(0.01, audioCtx.currentTime + start + dur);
+      osc.start(audioCtx.currentTime + start);
+      osc.stop(audioCtx.currentTime + start + dur);
+    };
+    // 明るい3音チャイム
+    playTone(523, 0, 0.15);    // C5
+    playTone(659, 0.15, 0.15); // E5
+    playTone(784, 0.3, 0.3);   // G5
+  } catch (e) {
+    // AudioContext がサポートされていない環境
+  }
+
+  // ページタイトルを点滅させて注意を引く
+  let blinkCount = 0;
+  const originalTitle = document.title;
+  const blinkInterval = setInterval(() => {
+    document.title = blinkCount % 2 === 0 ? "✅ 登録完了！" : originalTitle;
+    blinkCount++;
+    if (blinkCount >= 10) {
+      clearInterval(blinkInterval);
+      document.title = originalTitle;
+    }
+  }, 1000);
+}
+
+// 通知パーミッションをリクエスト
+function requestNotificationPermission() {
+  if ("Notification" in window && Notification.permission === "default") {
+    Notification.requestPermission();
   }
 }
 

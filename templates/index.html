@@ -4,7 +4,7 @@
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
   <title>LINEスタンプ自動でつくるくん</title>
-  <link rel="stylesheet" href="/static/css/style.css?v=3" />
+  <link rel="stylesheet" href="/static/css/style.css?v=4" />
 </head>
 <body>
   <div class="app">
@@ -154,78 +154,131 @@
 
           <!-- LINE自動登録フォーム -->
           <div id="line-upload-form" class="upload-form" hidden>
-            <h3 class="detail-title">スタンプ情報を入力</h3>
-            <div class="input-list">
-              <div class="input-row">
-                <span class="input-num">1</span>
-                <input type="text" id="stamp-title" class="msg-input" value="Pet Stickers" placeholder="Stamp Title (English)" />
+            <div class="line-flow-card">
+              <h3 class="line-flow-title">スタンプ情報を入力してください</h3>
+              <p class="line-flow-desc">LINE Creators Market に登録するスタンプの情報です（英語で入力）</p>
+              <div class="input-list">
+                <div class="input-row">
+                  <span class="input-num">1</span>
+                  <input type="text" id="stamp-title" class="msg-input" value="Pet Stickers" placeholder="Stamp Title (English)" />
+                </div>
+                <div class="input-row">
+                  <span class="input-num">2</span>
+                  <input type="text" id="stamp-desc" class="msg-input" value="Cute pet stickers" placeholder="Description (English)" />
+                </div>
               </div>
-              <div class="input-row">
-                <span class="input-num">2</span>
-                <input type="text" id="stamp-desc" class="msg-input" value="Cute pet stickers" placeholder="Description (English)" />
+              <div class="line-flow-note">
+                <p>📋 次のステップでLINEログイン画面が別ウィンドウで開きます</p>
               </div>
-            </div>
-            <div class="actions" style="margin-top: 1rem;">
-              <button class="btn btn-ghost" id="btn-cancel-upload">キャンセル</button>
-              <button class="btn btn-line" id="btn-start-upload">ブラウザを開いて登録開始</button>
+              <div class="actions" style="margin-top: 1rem;">
+                <button class="btn btn-ghost" id="btn-cancel-upload">キャンセル</button>
+                <button class="btn btn-line" id="btn-start-upload">次へ → ログイン</button>
+              </div>
             </div>
           </div>
 
-          <!-- LINE登録中（進行状況） -->
+          <!-- LINE登録中（ログイン待ち） -->
           <div id="line-uploading" hidden>
-            <div class="line-upload-status">
-              <p style="font-weight: bold; color: #e74c3c;">⚠️ 新しく開いた「Chromium」ブラウザウィンドウでログインしてください</p>
-              <p class="panel-desc">（普段使っているChromeではなく、自動で開いた別ウィンドウです）<br/>ログイン後、スタンプ登録が自動で進みます。</p>
+            <div class="line-flow-card">
+              <div class="line-flow-steps">
+                <div class="line-flow-step active">
+                  <div class="line-flow-step-icon">1</div>
+                  <span>ログイン</span>
+                </div>
+                <div class="line-flow-step-line"></div>
+                <div class="line-flow-step">
+                  <div class="line-flow-step-icon">2</div>
+                  <span>自動登録</span>
+                </div>
+                <div class="line-flow-step-line"></div>
+                <div class="line-flow-step">
+                  <div class="line-flow-step-icon">3</div>
+                  <span>完了</span>
+                </div>
+              </div>
+              <div class="line-login-prompt">
+                <div style="font-size: 48px; margin-bottom: 0.5rem;">🔐</div>
+                <h3 class="line-flow-title">別ウィンドウでLINEにログインしてください</h3>
+                <p class="line-flow-desc">自動で開いた「Chromium」ブラウザでログインしてください。<br/>普段使っているChromeとは別のウィンドウです。</p>
+                <div class="line-flow-note">
+                  <p>💡 ログインが完了すると、この画面が自動で切り替わります</p>
+                </div>
+              </div>
               <div class="progress-bar" style="margin-top: 1rem;">
                 <div class="progress-fill" id="line-upload-progress" style="width: 0%;"></div>
               </div>
-              <p class="panel-desc" id="line-upload-status-text" style="margin-top: 0.5rem;">待機中...</p>
-              <details id="line-upload-logs-toggle" style="margin-top: 0.5rem;">
-                <summary style="cursor: pointer; font-size: 12px; color: #888;">詳細ログを表示</summary>
-                <pre id="line-upload-logs" style="max-height: 200px; overflow-y: auto; background: #f5f5f5; padding: 8px; border-radius: 8px; font-size: 11px; margin-top: 0.5rem; white-space: pre-wrap; word-break: break-all;"></pre>
+              <p class="panel-desc" id="line-upload-status-text" style="margin-top: 0.5rem; font-size: 0.8rem; color: #999;">ブラウザを起動中...</p>
+              <details style="margin-top: 0.5rem;">
+                <summary style="cursor: pointer; font-size: 12px; color: #aaa;">詳細ログ</summary>
+                <pre id="line-upload-logs" style="max-height: 150px; overflow-y: auto; background: #f5f5f5; padding: 8px; border-radius: 8px; font-size: 11px; margin-top: 0.5rem; white-space: pre-wrap; word-break: break-all;"></pre>
               </details>
             </div>
           </div>
 
           <!-- 自動処理待機中 -->
           <div id="line-waiting" hidden>
-            <div style="text-align: center; padding: 2rem 1rem;">
-              <div style="font-size: 64px; margin-bottom: 1rem;">
-                <span class="waiting-animation">🐾</span>
+            <div class="line-flow-card">
+              <div class="line-flow-steps">
+                <div class="line-flow-step done">
+                  <div class="line-flow-step-icon">✓</div>
+                  <span>ログイン</span>
+                </div>
+                <div class="line-flow-step-line done"></div>
+                <div class="line-flow-step active">
+                  <div class="line-flow-step-icon">2</div>
+                  <span>自動登録</span>
+                </div>
+                <div class="line-flow-step-line"></div>
+                <div class="line-flow-step">
+                  <div class="line-flow-step-icon">3</div>
+                  <span>完了</span>
+                </div>
               </div>
-              <h3 style="font-size: 1.3rem; margin-bottom: 0.5rem; color: #333;">スタンプ完成までもう少し！</h3>
-              <p class="panel-desc" style="margin-bottom: 0.5rem;">
-                <strong>このページはそのままでお待ちください。</strong>
-              </p>
-              <p class="panel-desc" id="line-waiting-status" style="margin-bottom: 1.5rem; color: #555;">
-                自動登録を進めています...
-              </p>
-              <div class="progress-bar" style="max-width: 300px; margin: 0 auto;">
-                <div class="progress-fill" id="line-waiting-progress" style="width: 22%; transition: width 0.5s;"></div>
+              <div style="text-align: center; padding: 1.5rem 0;">
+                <div style="font-size: 48px; margin-bottom: 0.5rem;">
+                  <span class="waiting-animation">🐾</span>
+                </div>
+                <h3 class="line-flow-title">自動で登録しています...</h3>
+                <p class="line-flow-desc"><strong>このページはそのままでお待ちください</strong></p>
+                <p id="line-waiting-status" style="color: var(--green-dark); font-size: 0.9rem; margin: 0.5rem 0;">処理中...</p>
+                <div class="progress-bar" style="max-width: 300px; margin: 1rem auto 0;">
+                  <div class="progress-fill" id="line-waiting-progress" style="width: 22%; transition: width 0.5s;"></div>
+                </div>
+                <p style="margin-top: 1rem; font-size: 0.8rem; color: #bbb;">完了したらこの画面でお知らせします</p>
               </div>
-              <p class="panel-desc" style="margin-top: 1rem; font-size: 0.85rem; color: #999;">
-                ブラウザは裏で作業中です。閉じないでください。
-              </p>
             </div>
           </div>
 
           <!-- 審査リクエスト完了 -->
           <div id="line-complete" hidden>
-            <div style="text-align: center; padding: 2rem 1rem;">
-              <div style="font-size: 64px; margin-bottom: 1rem;">🎉</div>
-              <h3 style="font-size: 1.5rem; margin-bottom: 0.5rem; color: #06C755;">審査リクエスト完了！</h3>
-              <p class="panel-desc" style="margin-bottom: 1rem;">
-                スタンプがLINEの審査に提出されました。<br/>
-                審査には通常<strong>数日〜1週間</strong>ほどかかります。
-              </p>
-              <div style="background: #f0faf0; border-radius: 12px; padding: 1rem; margin: 1rem auto; max-width: 400px;">
-                <p style="font-size: 0.9rem; color: #333; margin: 0;">
-                  📱 審査状況は <a href="https://creator.line.me" target="_blank" style="color: #06C755; font-weight: bold;">LINE Creators Market</a> で確認できます。
-                </p>
+            <div class="line-flow-card">
+              <div class="line-flow-steps">
+                <div class="line-flow-step done">
+                  <div class="line-flow-step-icon">✓</div>
+                  <span>ログイン</span>
+                </div>
+                <div class="line-flow-step-line done"></div>
+                <div class="line-flow-step done">
+                  <div class="line-flow-step-icon">✓</div>
+                  <span>自動登録</span>
+                </div>
+                <div class="line-flow-step-line done"></div>
+                <div class="line-flow-step done">
+                  <div class="line-flow-step-icon">✓</div>
+                  <span>完了</span>
+                </div>
               </div>
-              <p class="panel-desc" style="margin-top: 1rem; font-size: 0.85rem; color: #999;">
-                審査通過後、スタンプが販売開始されます！
-              </p>
+              <div style="text-align: center; padding: 1.5rem 0;">
+                <div style="font-size: 64px; margin-bottom: 0.5rem;">🎉</div>
+                <h3 style="font-size: 1.4rem; margin-bottom: 0.5rem; color: var(--green);">審査リクエスト完了！</h3>
+                <p class="line-flow-desc">
+                  スタンプがLINEの審査に提出されました！<br/>
+                  審査には通常<strong>数日〜1週間</strong>ほどかかります。
+                </p>
+                <div class="line-flow-note" style="margin-top: 1rem;">
+                  <p>📱 審査状況は <a href="https://creator.line.me" target="_blank" style="color: var(--green); font-weight: bold;">LINE Creators Market</a> で確認できます</p>
+                </div>
+              </div>
             </div>
           </div>
 
@@ -348,6 +401,6 @@
     </footer>
   </div>
 
-  <script src="/static/js/app.js?v=3"></script>
+  <script src="/static/js/app.js?v=4"></script>
 </body>
 </html>
