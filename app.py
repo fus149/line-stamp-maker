@@ -160,8 +160,8 @@ async def download_zip(session_id: str):
 @app.post("/api/upload-to-line/{session_id}")
 async def upload_to_line_api(
     session_id: str,
-    title: str = Form("ペットスタンプ"),
-    description: str = Form("かわいいペットのスタンプです"),
+    title: str = Form("Pet Stickers"),
+    description: str = Form("Cute pet stickers"),
 ):
     """Playwrightでブラウザを開き、LINE Creators Marketに自動登録する。"""
     output_dir = SESSIONS_DIR / session_id / "output"

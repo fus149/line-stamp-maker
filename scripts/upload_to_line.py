@@ -706,24 +706,262 @@ def fill_sticker_info(page: Page, title: str, description: str, status: UploadSt
     except Exception as e:
         status.update("情報入力", f"説明文入力失敗: {e}")
 
+    # コピーライト入力（空なら入力）
+    try:
+        copyright_filled = False
+        for i in range(inputs.count()):
+            inp = inputs.nth(i)
+            if not inp.is_visible():
+                continue
+            name = (inp.get_attribute("name") or "").lower()
+            if "copyright" in name:
+                current_val = inp.input_value()
+                if not current_val.strip():
+                    inp.fill("fus")
+                    status.update("情報入力", "コピーライト入力: fus", 52)
+                else:
+                    status.update("情報入力", f"コピーライト既入力: {current_val}", 52)
+                copyright_filled = True
+                break
+        if not copyright_filled:
+            status.update("デバッグ", "コピーライトフィールド未検出")
+    except Exception as e:
+        status.update("デバッグ", f"コピーライト入力失敗: {e}")
+
+    # AIの使用チェック（AI生成スタンプなので「AIを使用しています」を選択）
+    try:
+        ai_checked = page.evaluate("""
+            (() => {
+                // ラジオボタンやチェックボックスで「AIを使用」を探す
+                const radios = document.querySelectorAll('input[type="radio"]');
+                for (const radio of radios) {
+                    const label = radio.closest('label') || document.querySelector('label[for="' + radio.id + '"]');
+                    const text = label ? label.textContent.trim() : '';
+                    if (text.includes('AIを使用しています') || text.includes('AI')) {
+                        if (!radio.checked) {
+                            radio.click();
+                            return 'checked: ' + text;
+                        }
+                        return 'already checked: ' + text;
+                    }
+                }
+                // name属性で探す
+                const aiRadio = document.querySelector('input[name*="ai"], input[name*="AI"]');
+                if (aiRadio && !aiRadio.checked) {
+                    aiRadio.click();
+                    return 'checked by name';
+                }
+                return null;
+            })()
+        """)
+        if ai_checked:
+            status.update("情報入力", f"AI使用: {ai_checked}", 53)
+        else:
+            status.update("デバッグ", "AI使用フィールド未検出")
+    except Exception as e:
+        status.update("デバッグ", f"AI使用チェック失敗: {e}")
+
     time.sleep(1)
     status.save_screenshot(page, "07_after_fill")
 
 
+def submit_creation_form(page: Page, status: UploadStatus) -> bool:
+    """新規登録フォームの「保存」ボタンをクリックし、編集ページに遷移する。
+    戻り値: 編集ページに到達したらTrue。"""
+    status.update("フォーム送信", "フォームを保存中...", 55)
+
+    url_before = page.url
+
+    # 保存ボタンを探してクリック
+    save_clicked = False
+
+    # 戦略1: テキストで探す（「保存」「次へ」「登録」）
+    for btn_text in ["保存", "次へ", "Save", "登録"]:
+        try:
+            locator = page.get_by_role("button", name=btn_text)
+            if locator.count() > 0:
+                locator.first.click()
+                status.update("フォーム送信", f"「{btn_text}」ボタンをクリック", 57)
+                save_clicked = True
+                break
+            # リンクとしても探す
+            locator = page.get_by_role("link", name=btn_text)
+            if locator.count() > 0:
+                locator.first.click()
+                status.update("フォーム送信", f"「{btn_text}」リンクをクリック", 57)
+                save_clicked = True
+                break
+        except Exception:
+            continue
+
+    # 戦略2: submit ボタン / input[type=submit]
+    if not save_clicked:
+        try:
+            submit_btn = page.locator("input[type='submit'], button[type='submit']")
+            if submit_btn.count() > 0:
+                submit_btn.first.click()
+                status.update("フォーム送信", "submitボタンをクリック", 57)
+                save_clicked = True
+        except Exception:
+            pass
+
+    # 戦略3: JSで保存・登録系のボタンを探す
+    if not save_clicked:
+        try:
+            result = page.evaluate("""
+                (() => {
+                    const btns = document.querySelectorAll('button, input[type="submit"], a.btn, a[class*="button"]');
+                    const keywords = ['保存', '次へ', '登録', 'Save', 'Next', 'Submit'];
+                    for (const btn of btns) {
+                        const text = (btn.textContent || btn.value || '').trim();
+                        for (const kw of keywords) {
+                            if (text.includes(kw)) {
+                                btn.click();
+                                return {text: text, tag: btn.tagName};
+                            }
+                        }
+                    }
+                    return null;
+                })()
+            """)
+            if result:
+                status.update("フォーム送信", f"JSクリック: {result}", 57)
+                save_clicked = True
+        except Exception as e:
+            status.update("デバッグ", f"JS保存ボタン検索失敗: {e}")
+
+    if not save_clicked:
+        status.update("警告", "保存ボタンが見つかりません")
+        status.save_screenshot(page, "07b_no_save_button")
+        status.dump_page_info(page, "保存ボタン未検出")
+        return False
+
+    # ページ遷移を待つ
+    time.sleep(3)
+    _wait_for_page_ready(page)
+
+    # バリデーションエラーチェック
+    try:
+        error_elements = page.locator("[class*='error'], [class*='invalid'], .text-danger, .field-error")
+        error_count = error_elements.count()
+        visible_errors = []
+        for i in range(min(error_count, 10)):
+            el = error_elements.nth(i)
+            if el.is_visible():
+                text = (el.text_content() or "").strip()[:100]
+                if text:
+                    visible_errors.append(text)
+        if visible_errors:
+            status.update("警告", f"バリデーションエラー: {'; '.join(visible_errors)}", 55)
+            status.save_screenshot(page, "07c_validation_error")
+    except Exception:
+        pass
+
+    # URL変化確認
+    if page.url != url_before:
+        status.update("フォーム送信", f"ページ遷移成功: {page.url}", 60)
+        status.save_screenshot(page, "08_after_save")
+        return True
+
+    # URLが変わらない場合 → まだ同じページ（エラーか、SPAでの遷移）
+    # ページ内容を確認
+    time.sleep(3)
+    status.save_screenshot(page, "08_after_save")
+
+    # edit/upload 関連の要素が出現したか確認
+    has_edit_elements = page.locator(
+        "[class*='sticker'], [class*='upload'], [class*='edit'], "
+        "input[type='file'], [class*='stamp-item']"
+    ).count() > 0
+
+    if has_edit_elements:
+        status.update("フォーム送信", "編集ページ要素を検出", 60)
+        return True
+
+    status.update("フォーム送信", f"保存後のURL: {page.url}（変化なし）", 58)
+    status.dump_page_info(page, "保存後")
+    return page.url != url_before
+
+
 def upload_images(page: Page, output_dir: Path, status: UploadStatus):
-    """スタンプ画像を1枚ずつアップロードする。"""
+    """スタンプ画像をアップロードする。
+    LINE Creators Marketの編集ページでは、個別のスタンプスロットに画像をアップする。
+    ページ構造によって複数の方法を試す。"""
     stamp_files = sorted(output_dir.glob("[0-9][0-9].png"))
     total = len(stamp_files)
-    status.update("画像アップ", f"スタンプ画像をアップロード中... ({total}枚)", 55)
+    status.update("画像アップ", f"スタンプ画像をアップロード中... ({total}枚)", 65)
 
-    for i, stamp_file in enumerate(stamp_files, 1):
-        progress = 55 + int((i / total) * 35)
+    # デバッグ: 現在のページ構造を記録
+    status.save_screenshot(page, "09_upload_page")
+    status.dump_page_info(page, "画像アップロードページ")
+
+    # 方法1: 複数のfile inputがある場合（一度に全てセット可能）
+    file_inputs = page.locator("input[type='file']")
+    fi_count = file_inputs.count()
+    status.update("画像アップ", f"file input数: {fi_count}", 66)
+
+    if fi_count >= total:
+        # 十分な数のfile inputがある → 各inputに1枚ずつ
+        for i, stamp_file in enumerate(stamp_files):
+            try:
+                file_inputs.nth(i).set_input_files(str(stamp_file))
+                status.update("画像アップ", f"[{i+1}/{total}] {stamp_file.name} OK", 65 + int((i+1)/total*25))
+                time.sleep(1)
+            except Exception as e:
+                status.update("画像アップ", f"[{i+1}/{total}] {stamp_file.name} 失敗: {e}")
+        status.save_screenshot(page, "10_after_upload")
+        status.update("画像アップ", "画像アップロード完了！", 95)
+        return
+
+    # 方法2: file inputが1つ → multiple属性でまとめてアップロード
+    if fi_count == 1:
         try:
+            fi = file_inputs.first
+            file_paths = [str(f) for f in stamp_files]
+            fi.set_input_files(file_paths)
+            status.update("画像アップ", f"一括アップロード: {total}枚", 85)
+            time.sleep(5)
+            status.save_screenshot(page, "10_after_upload")
+            status.update("画像アップ", "画像アップロード完了！", 95)
+            return
+        except Exception as e:
+            status.update("デバッグ", f"一括アップロード失敗: {e}")
+
+    # 方法3: スタンプスロットをクリックしてfile inputを出現させる
+    # 編集ページではスタンプアイテムの空スロットをクリックするとfile inputが出る
+    uploaded_count = 0
+    for i, stamp_file in enumerate(stamp_files):
+        progress = 65 + int((i + 1) / total * 25)
+        try:
+            # 空のスタンプスロット/追加ボタンを探す
+            slot_clicked = False
+
+            # クリッカブルなスロット要素を探す
+            slot_selectors = [
+                "[class*='sticker-item'] [class*='add'], [class*='sticker-item'] [class*='empty']",
+                "[class*='stamp'] [class*='add'], [class*='stamp'] [class*='empty']",
+                "[class*='upload-area'], [class*='drop-zone']",
+                "button:has-text('追加'), button:has-text('アップロード'), button:has-text('Upload')",
+                "a:has-text('追加'), a:has-text('アップロード')",
+            ]
+            for selector in slot_selectors:
+                try:
+                    slots = page.locator(selector)
+                    if slots.count() > 0:
+                        slots.first.click()
+                        slot_clicked = True
+                        status.update("画像アップ", f"[{i+1}/{total}] スロットクリック: {selector[:40]}")
+                        time.sleep(2)
+                        break
+                except Exception:
+                    continue
+
+            # file inputを再チェック
             file_inputs = page.locator("input[type='file']")
             fi_count = file_inputs.count()
-            status.update("画像アップ", f"[{i}/{total}] file input数: {fi_count}", progress)
 
             if fi_count > 0:
+                # 空のfile inputを探す
                 uploaded = False
                 for fi_idx in range(fi_count):
                     fi = file_inputs.nth(fi_idx)
@@ -737,34 +975,48 @@ def upload_images(page: Page, output_dir: Path, status: UploadStatus):
                         break
 
                 if not uploaded:
-                    file_inputs.first.set_input_files(str(stamp_file))
+                    file_inputs.last.set_input_files(str(stamp_file))
 
-                status.update("画像アップ", f"[{i}/{total}] {stamp_file.name} OK", progress)
+                status.update("画像アップ", f"[{i+1}/{total}] {stamp_file.name} OK", progress)
+                uploaded_count += 1
                 time.sleep(3)
             else:
-                upload_btns = page.locator(
-                    "button:has-text('アップロード'), "
-                    "button:has-text('Upload'), "
-                    "a:has-text('アップロード')"
-                )
-                if upload_btns.count() > 0:
-                    upload_btns.first.click()
-                    time.sleep(2)
-                    file_inputs = page.locator("input[type='file']")
-                    if file_inputs.count() > 0:
-                        file_inputs.first.set_input_files(str(stamp_file))
-                        status.update("画像アップ", f"[{i}/{total}] {stamp_file.name} OK", progress)
-                        time.sleep(3)
+                # file inputがない場合、filechooserイベントを使う
+                try:
+                    if not slot_clicked:
+                        # クリック対象を探す
+                        clickable = page.locator(
+                            "[class*='add'], [class*='plus'], [class*='upload']"
+                        )
+                        if clickable.count() > 0:
+                            with page.expect_file_chooser(timeout=5000) as fc_info:
+                                clickable.first.click()
+                            file_chooser = fc_info.value
+                            file_chooser.set_files(str(stamp_file))
+                            status.update("画像アップ", f"[{i+1}/{total}] {stamp_file.name} OK (filechooser)", progress)
+                            uploaded_count += 1
+                            time.sleep(3)
+                        else:
+                            status.update("画像アップ", f"[{i+1}/{total}] アップロード手段なし", progress)
                     else:
-                        status.update("画像アップ", f"[{i}/{total}] ファイル入力が見つかりません", progress)
-                else:
-                    status.update("画像アップ", f"[{i}/{total}] アップロード手段なし", progress)
+                        # スロットはクリックしたがfile inputが出ない
+                        try:
+                            with page.expect_file_chooser(timeout=5000) as fc_info:
+                                pass  # 既にクリック済み
+                            file_chooser = fc_info.value
+                            file_chooser.set_files(str(stamp_file))
+                            uploaded_count += 1
+                            time.sleep(3)
+                        except Exception:
+                            status.update("画像アップ", f"[{i+1}/{total}] filechooser待機タイムアウト", progress)
+                except Exception as e:
+                    status.update("画像アップ", f"[{i+1}/{total}] {stamp_file.name} 失敗: {e}", progress)
 
         except Exception as e:
-            status.update("画像アップ", f"[{i}/{total}] {stamp_file.name} 失敗: {e}", progress)
+            status.update("画像アップ", f"[{i+1}/{total}] {stamp_file.name} 失敗: {e}", progress)
 
-    status.save_screenshot(page, "08_after_upload")
-    status.update("画像アップ", "画像アップロード完了！", 95)
+    status.save_screenshot(page, "10_after_upload")
+    status.update("画像アップ", f"画像アップロード完了！({uploaded_count}/{total}枚成功)", 95)
 
 
 # ============================================================
@@ -773,8 +1025,8 @@ def upload_images(page: Page, output_dir: Path, status: UploadStatus):
 
 def upload_to_line(
     output_dir: Path,
-    title: str = "ペットスタンプ",
-    description: str = "かわいいペットのスタンプです",
+    title: str = "Pet Stickers",
+    description: str = "Cute pet stickers",
     interactive: bool = True,
     status_file: Optional[Path] = None,
 ) -> bool:
@@ -862,7 +1114,16 @@ def upload_to_line(
             # Step 4: スタンプ情報入力
             fill_sticker_info(page, title, description, status)
 
-            # Step 5: 画像アップロード
+            # Step 5: フォーム保存（新規登録フォームを送信→編集ページへ遷移）
+            form_saved = submit_creation_form(page, status)
+            if form_saved:
+                status.update("フォーム送信", "編集ページに遷移しました", 62)
+                time.sleep(3)
+                _wait_for_page_ready(page)
+            else:
+                status.update("警告", "フォーム保存に失敗。現在のページで画像アップロードを試みます。", 60)
+
+            # Step 6: 画像アップロード
             upload_images(page, output_dir, status)
 
             status.update("完了", "自動登録完了！ブラウザで内容を確認してください。", 100)
@@ -896,8 +1157,8 @@ if __name__ == "__main__":
 
     parser = argparse.ArgumentParser(description="LINE Creators Marketにスタンプを自動登録")
     parser.add_argument("output_dir", nargs="?", default=None, help="スタンプ画像のディレクトリ")
-    parser.add_argument("--title", default="ペットスタンプ", help="スタンプタイトル")
-    parser.add_argument("--desc", default="かわいいペットのスタンプです", help="スタンプ説明文")
+    parser.add_argument("--title", default="Pet Stickers", help="スタンプタイトル")
+    parser.add_argument("--desc", default="Cute pet stickers", help="スタンプ説明文")
     args = parser.parse_args()
 
     if args.output_dir:
