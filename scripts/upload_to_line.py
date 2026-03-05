@@ -277,24 +277,68 @@ def wait_for_login(page: Page, status: UploadStatus, timeout: int = 300) -> Opti
 
 def _dismiss_modals(page: Page, status: UploadStatus):
     """ダッシュボード上のモーダルポップアップ（キャンペーン告知等）を閉じる。"""
+    # まずJavaScriptで「閉じる」テキストを含むクリック可能要素を直接探してクリック
+    try:
+        closed = page.evaluate("""
+            (() => {
+                // 「閉じる」「Close」テキストを持つ要素を探す
+                const candidates = document.querySelectorAll('a, button, [role="button"], span[onclick], div[onclick]');
+                for (const el of candidates) {
+                    const text = (el.textContent || '').trim();
+                    if ((text === '閉じる' || text === 'Close' || text === '✕' || text === '×') &&
+                        el.offsetParent !== null) {
+                        el.click();
+                        return text;
+                    }
+                }
+                // モーダルの閉じるボタン（class名ベース）
+                const closeBtn = document.querySelector(
+                    '.modal-close, [class*="close"], [class*="dismiss"], [aria-label="Close"], [aria-label="閉じる"]'
+                );
+                if (closeBtn && closeBtn.offsetParent !== null) {
+                    closeBtn.click();
+                    return 'class-based close';
+                }
+                return null;
+            })()
+        """)
+        if closed:
+            status.update("デバッグ", f"モーダルをJSで閉じました: {closed}")
+            time.sleep(2)
+            return
+    except Exception as e:
+        status.update("デバッグ", f"JSモーダル閉じ試行エラー: {e}")
+
+    # フォールバック: Playwrightセレクタで試行（button + a タグ両方）
     close_selectors = [
+        "a:has-text('閉じる')",
         "button:has-text('閉じる')",
+        "a:has-text('Close')",
         "button:has-text('Close')",
         "button.modal-close",
+        "[class*='modal'] a",
         "[class*='modal'] button",
-        "[class*='dialog'] button:has-text('閉じる')",
-        "[class*='overlay'] button:has-text('閉じる')",
+        "[class*='dialog'] a:has-text('閉じる')",
+        "[class*='overlay'] a:has-text('閉じる')",
     ]
     for sel in close_selectors:
         try:
             btn = page.locator(sel).first
             if btn.is_visible(timeout=1000):
-                btn.click()
+                btn.click(force=True)
                 status.update("デバッグ", f"モーダルを閉じました: {sel}")
-                time.sleep(1)
+                time.sleep(2)
                 return
         except Exception:
             continue
+
+    # 最終手段: Escキーを押してモーダルを閉じる
+    try:
+        page.keyboard.press("Escape")
+        status.update("デバッグ", "Escキーでモーダル閉じを試行")
+        time.sleep(1)
+    except Exception:
+        pass
 
 
 def _extract_user_path(page: Page) -> Optional[str]:
@@ -307,95 +351,153 @@ def _extract_user_path(page: Page) -> Optional[str]:
     return None
 
 
+def _ensure_on_dashboard(page: Page, status: UploadStatus) -> bool:
+    """ダッシュボードにいることを確認し、いなければ戻る。"""
+    if _is_on_dashboard(page):
+        return True
+    status.update("ページ遷移", "ダッシュボードに移動中...", 25)
+    return _try_navigate_to_dashboard(page, status)
+
+
+def _click_new_registration(page: Page, status: UploadStatus) -> bool:
+    """「新規登録」ボタンをクリックする。複数の戦略で試行。"""
+
+    # 戦略1: JavaScriptで「新規登録」テキストを持つリンク/ボタンを直接クリック
+    # （モーダルのオーバーレイに関係なくDOMを直接操作）
+    try:
+        result = page.evaluate("""
+            (() => {
+                const elements = document.querySelectorAll('a, button, [role="button"]');
+                for (const el of elements) {
+                    const text = (el.textContent || '').trim();
+                    if (text.includes('新規登録')) {
+                        el.click();
+                        return {text: text, href: el.href || el.getAttribute('href') || '', tag: el.tagName};
+                    }
+                }
+                return null;
+            })()
+        """)
+        if result:
+            status.update("ページ遷移", f"「新規登録」JSクリック成功: {result}", 28)
+            time.sleep(3)
+            _wait_for_page_ready(page)
+            return True
+    except Exception as e:
+        status.update("デバッグ", f"JS新規登録クリックエラー: {e}")
+
+    # 戦略2: Playwrightのforce=Trueクリック（オーバーレイを無視）
+    try:
+        links = page.locator("a, button").all()
+        for link in links:
+            try:
+                text = (link.text_content() or "").strip()
+                if "新規登録" in text:
+                    href = link.get_attribute("href") or ""
+                    status.update("ページ遷移", f"「新規登録」発見: text=\"{text}\" href=\"{href}\"", 28)
+                    link.click(force=True)
+                    time.sleep(3)
+                    _wait_for_page_ready(page)
+                    return True
+            except Exception:
+                continue
+    except Exception as e:
+        status.update("デバッグ", f"force新規登録クリックエラー: {e}")
+
+    # 戦略3: hrefから新規登録リンクを探してそのURLに直接遷移
+    try:
+        result = page.evaluate("""
+            (() => {
+                const links = document.querySelectorAll('a[href]');
+                for (const a of links) {
+                    const text = (a.textContent || '').trim();
+                    if (text.includes('新規登録') && a.href) {
+                        return a.href;
+                    }
+                }
+                return null;
+            })()
+        """)
+        if result:
+            status.update("ページ遷移", f"「新規登録」href取得: {result}", 28)
+            page.goto(result, timeout=15000)
+            _wait_for_page_ready(page)
+            return True
+    except Exception as e:
+        status.update("デバッグ", f"href遷移エラー: {e}")
+
+    return False
+
+
 def navigate_to_new_sticker(page: Page, status: UploadStatus) -> bool:
     """スタンプ新規作成ページに遷移する。"""
     status.update("ページ遷移", f"新規登録ページに移動中... 現在URL: {page.url[:100]}", 25)
 
-    # ダッシュボードにいない場合
-    if not _is_on_dashboard(page):
-        status.update("ページ遷移", "ダッシュボードに移動中...", 25)
-        if not _try_navigate_to_dashboard(page, status):
-            status.update("エラー", f"ダッシュボードに到達できませんでした。URL: {page.url[:100]}")
-            status.save_screenshot(page, "03_dashboard_fail")
-            return False
+    # ダッシュボードにいない場合は移動
+    if not _ensure_on_dashboard(page, status):
+        status.update("エラー", f"ダッシュボードに到達できませんでした。URL: {page.url[:100]}")
+        status.save_screenshot(page, "03_dashboard_fail")
+        return False
 
-    # モーダルを閉じる（ここでも再度試行）
-    _dismiss_modals(page, status)
+    # モーダルを閉じる（複数回試行）
+    for attempt in range(3):
+        _dismiss_modals(page, status)
+        time.sleep(1)
 
     # ページ完全読み込みを待つ
     _wait_for_page_ready(page)
-    time.sleep(2)
+    time.sleep(1)
 
     status.save_screenshot(page, "03_dashboard")
     status.dump_page_info(page, "ダッシュボード")
 
-    # ---- 戦略1: 「新規登録」ボタンを直接クリック ----
+    # ---- 「新規登録」ボタンをクリック ----
     status.update("ページ遷移", "「新規登録」ボタンを探しています...", 27)
 
-    new_reg_clicked = False
-
-    try:
-        links = page.locator("a").all()
-        for link in links:
-            try:
-                text = (link.text_content() or "").strip()
-                href = link.get_attribute("href") or ""
-                if "新規登録" in text and link.is_visible():
-                    status.update("ページ遷移", f"「新規登録」発見: text=\"{text}\" href=\"{href}\"", 28)
-                    link.click()
-                    time.sleep(3)
-                    _wait_for_page_ready(page)
-                    new_reg_clicked = True
-                    break
-            except Exception:
-                continue
-    except Exception as e:
-        status.update("デバッグ", f"リンク探索エラー: {e}")
-
-    if not new_reg_clicked:
-        # ---- 戦略2: ユーザーパスから新規登録URLを推測して直接遷移 ----
-        user_path = _extract_user_path(page)
-        if user_path:
-            candidate_urls = [
-                f"https://creator.line.me{user_path}/sticker/new/",
-                f"https://creator.line.me{user_path}/new/",
-                f"https://creator.line.me{user_path}/sticker/new",
-            ]
-            for url in candidate_urls:
-                status.update("ページ遷移", f"URL直接遷移を試行: {url}", 28)
-                page.goto(url, timeout=15000)
-                _wait_for_page_ready(page)
-                page_text = page.text_content("body") or ""
-                if "存在しません" not in page_text and "404" not in page.title():
-                    form_count = page.locator("input, textarea, select").count()
-                    if form_count > 0:
-                        new_reg_clicked = True
-                        status.update("ページ遷移", f"URL直接遷移成功: {url}", 30)
-                        break
-
-    if not new_reg_clicked:
+    if not _click_new_registration(page, status):
         status.save_screenshot(page, "03_new_reg_failed")
         status.dump_page_info(page, "新規登録失敗")
         status.update("エラー", "「新規登録」ボタンが見つかりません。デバッグスクリーンショットを確認してください。")
         return False
+
+    # 404ページに飛んでしまった場合はダッシュボードに戻ってリトライ
+    page_text = (page.text_content("body") or "")[:500]
+    if "存在しません" in page_text or "404" in page.title():
+        status.update("ページ遷移", "404ページに到達。ダッシュボードに戻ります...", 27)
+        if _ensure_on_dashboard(page, status):
+            _dismiss_modals(page, status)
+            time.sleep(1)
+        else:
+            return False
 
     status.save_screenshot(page, "04_after_new_reg_click")
     status.update("ページ遷移", f"新規登録クリック後: {page.url}", 30)
     status.dump_page_info(page, "新規登録後")
 
     # ---- スタンプタイプ選択 ----
+    # 新規登録をクリックすると、スタンプ/絵文字/着せかえの選択画面になることがある
     time.sleep(2)
     try:
-        sticker_link = page.locator("a").filter(has_text="スタンプ").first
-        if sticker_link.is_visible(timeout=3000):
-            href = sticker_link.get_attribute("href") or ""
-            text = (sticker_link.text_content() or "").strip()
-            if href and "sticker" in href.lower():
-                status.update("ページ遷移", f"「{text}」を選択 (href={href})", 32)
-                sticker_link.click()
-                time.sleep(3)
-                _wait_for_page_ready(page)
-                status.save_screenshot(page, "05_after_sticker_select")
+        # 「スタンプ」を含むリンクでhrefに"sticker"があるものを探す
+        result = page.evaluate("""
+            (() => {
+                const links = document.querySelectorAll('a[href]');
+                for (const a of links) {
+                    const text = (a.textContent || '').trim();
+                    const href = a.href || '';
+                    if (text.includes('スタンプ') && href.includes('sticker')) {
+                        a.click();
+                        return {text: text, href: href};
+                    }
+                }
+                return null;
+            })()
+        """)
+        if result:
+            status.update("ページ遷移", f"「スタンプ」を選択: {result}", 32)
+            time.sleep(3)
+            _wait_for_page_ready(page)
+            status.save_screenshot(page, "05_after_sticker_select")
     except Exception:
         pass
 
@@ -609,19 +711,33 @@ def upload_to_line(
                 return False
             page = logged_in_page
 
-            # Step 2: モーダルを閉じる
+            # Step 2: モーダルを閉じる（複数回試行）
+            time.sleep(2)  # ダッシュボード描画完了を待つ
             _dismiss_modals(page, status)
+            status.save_screenshot(page, "02b_after_modal_dismiss")
 
-            # Step 3: スタンプ作成ページへ遷移
-            if not navigate_to_new_sticker(page, status):
+            # Step 3: スタンプ作成ページへ遷移（最大2回リトライ）
+            sticker_page_reached = False
+            for nav_attempt in range(2):
+                if navigate_to_new_sticker(page, status):
+                    sticker_page_reached = True
+                    break
+                # リトライ前にダッシュボードに戻ってモーダルを確実に閉じる
+                status.update("ページ遷移", f"リトライ {nav_attempt + 1}/2: ダッシュボードに戻ります...", 25)
+                if _ensure_on_dashboard(page, status):
+                    time.sleep(2)
+                    _dismiss_modals(page, status)
+                    time.sleep(2)
+
+            if not sticker_page_reached:
                 status.update("警告", "自動遷移に失敗。手動で操作してください。")
                 if interactive:
                     print("  手動でスタンプ作成ページに移動してください。")
                     print("  移動したらEnterを押してください...")
                     input()
                 else:
-                    status.update("警告", "60秒待機中... 手動でスタンプ作成ページに移動してください。")
-                    time.sleep(60)
+                    status.update("警告", "30秒待機中... 手動でスタンプ作成ページに移動してください。")
+                    time.sleep(30)
                     form_count = page.locator("input[type='text'], textarea, input[type='file']").count()
                     if form_count == 0:
                         status.update("エラー", "スタンプ作成ページに到達できませんでした。")
