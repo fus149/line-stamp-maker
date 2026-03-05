@@ -274,7 +274,7 @@ def process_single_image(
     message: Optional[str] = None,
     font_path: Optional[str] = None,
     font_size: int = 32,
-) -> Path:
+) -> dict:
     """1枚の画像をLINEスタンプに変換する。
 
     Args:
@@ -285,7 +285,7 @@ def process_single_image(
         font_size: フォントサイズ
 
     Returns:
-        出力ファイルのパス
+        辞書: {"path": 出力パス, "text_position": "top"/"bottom"/None}
     """
     output_path = Path(output_path)
 
@@ -321,6 +321,10 @@ def process_single_image(
     # Step3: 構図調整
     img = _center_and_resize(img, text_position, has_text)
 
+    # base画像を保存（テキストなし版 — エディタで使用）
+    base_path = output_path.parent / output_path.name.replace(".png", "_base.png")
+    img.save(str(base_path), "PNG")
+
     # 文字追加
     if has_text:
         img = _add_text(img, message, text_position, font_path, font_size)
@@ -328,7 +332,7 @@ def process_single_image(
     # 保存
     img.save(str(output_path), "PNG")
     print(f"  完了: {output_path.name}")
-    return output_path
+    return {"path": output_path, "text_position": text_position}
 
 
 def process_all_images(
@@ -337,7 +341,7 @@ def process_all_images(
     messages: List[Optional[str]],
     font_path: Optional[str] = None,
     font_size: int = 32,
-) -> List[Path]:
+) -> dict:
     """8枚の画像を一括処理する。
 
     Args:
@@ -348,7 +352,7 @@ def process_all_images(
         font_size: フォントサイズ
 
     Returns:
-        出力ファイルパスのリスト
+        辞書: {"paths": [...], "text_positions": [...]}
     """
     input_dir = Path(input_dir)
     output_dir = Path(output_dir)
@@ -406,7 +410,9 @@ def process_all_images(
     # main.png / tab.png を自動生成
     generate_main_and_tab(output_dir)
 
-    return results
+    paths = [r["path"] for r in results]
+    text_positions = [r["text_position"] for r in results]
+    return {"paths": paths, "text_positions": text_positions}
 
 
 def generate_main_and_tab(output_dir: Path):

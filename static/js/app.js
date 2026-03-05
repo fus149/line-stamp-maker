@@ -9,6 +9,23 @@ const state = {
   mode: "A",
   templates: [],
   selectedTemplates: [],
+
+  // Editor
+  editorOpen: false,
+  editingIndex: -1,
+  editingFilename: "",
+  activeTool: "eraser",
+  brushSize: 20,
+  undoStack: [],
+  subjectOffsetX: 0,
+  subjectOffsetY: 0,
+  subjectScale: 1.0,
+  isDragging: false,
+  dragStartX: 0,
+  dragStartY: 0,
+  stampMessages: [],
+  stampTextPositions: [],
+  moveBaseImageData: null,
 };
 
 // --- DOM ---
@@ -307,19 +324,30 @@ function showResult(data) {
   $("#processing").hidden = true;
   $("#result").hidden = false;
 
+  // メッセージとテキスト位置を保存（エディターで使用）
+  state.stampMessages = data.messages || [];
+  state.stampTextPositions = data.text_positions || [];
+
   const grid = $("#result-grid");
   grid.innerHTML = "";
 
-  data.stamps.forEach((filename) => {
+  data.stamps.forEach((filename, i) => {
     const div = document.createElement("div");
     div.className = "result-item";
+    div.dataset.index = i;
+    div.dataset.filename = filename;
 
     const img = document.createElement("img");
     img.src = `/api/stamp/${state.sessionId}/${filename}`;
     img.alt = filename;
     img.loading = "lazy";
 
-    div.appendChild(img);
+    const badge = document.createElement("button");
+    badge.className = "edit-badge";
+    badge.textContent = "編集";
+    badge.addEventListener("click", () => openEditor(i));
+
+    div.append(img, badge);
     grid.appendChild(div);
   });
 
@@ -488,11 +516,316 @@ async function loadDebugScreenshots() {
   }
 }
 
+// --- Stamp Editor ---
+let isErasing = false;
+
+function initEditor() {
+  // ツール切り替え
+  $$(".editor-tool-btn").forEach((btn) => {
+    btn.addEventListener("click", () => {
+      $$(".editor-tool-btn").forEach((b) => b.classList.remove("active"));
+      btn.classList.add("active");
+      state.activeTool = btn.dataset.tool;
+
+      $("#eraser-controls").hidden = state.activeTool !== "eraser";
+      $("#move-controls").hidden = state.activeTool !== "move";
+      $("#text-controls").hidden = state.activeTool !== "text";
+
+      updateCanvasCursor();
+
+      // 移動ツールに切り替えた時、現在のcanvasを基準画像として保存
+      if (state.activeTool === "move") {
+        const canvas = $("#editor-canvas");
+        const ctx = canvas.getContext("2d");
+        state.moveBaseImageData = ctx.getImageData(0, 0, 370, 320);
+        state.subjectOffsetX = 0;
+        state.subjectOffsetY = 0;
+        state.subjectScale = 1.0;
+        $("#zoom-slider").value = 100;
+        $("#zoom-val").textContent = "100";
+      }
+    });
+  });
+
+  // ブラシサイズ
+  $("#brush-size").addEventListener("input", (e) => {
+    state.brushSize = +e.target.value;
+    $("#brush-size-val").textContent = state.brushSize;
+    updateCanvasCursor();
+  });
+
+  // ズームスライダー
+  $("#zoom-slider").addEventListener("input", (e) => {
+    state.subjectScale = +e.target.value / 100;
+    $("#zoom-val").textContent = e.target.value;
+    redrawMoveCanvas();
+  });
+
+  // Canvas イベント（PointerEvents で mouse + touch 統合）
+  const canvas = $("#editor-canvas");
+  canvas.addEventListener("pointerdown", onCanvasPointerDown);
+  canvas.addEventListener("pointermove", onCanvasPointerMove);
+  canvas.addEventListener("pointerup", onCanvasPointerUp);
+  canvas.addEventListener("pointerleave", onCanvasPointerUp);
+  canvas.addEventListener("touchstart", (e) => e.preventDefault(), { passive: false });
+
+  // ボタン
+  $("#editor-back").addEventListener("click", closeEditor);
+  $("#editor-cancel").addEventListener("click", closeEditor);
+  $("#editor-save").addEventListener("click", saveEditedStamp);
+  $("#btn-undo").addEventListener("click", undoErase);
+  $("#btn-reset-pos").addEventListener("click", resetPosition);
+  $("#editor-prev").addEventListener("click", () => navigateStamp(-1));
+  $("#editor-next").addEventListener("click", () => navigateStamp(1));
+
+  // テキスト位置ボタン
+  $$(".text-pos-btn").forEach((btn) => {
+    btn.addEventListener("click", () => {
+      $$(".text-pos-btn").forEach((b) => b.classList.remove("active"));
+      btn.classList.add("active");
+    });
+  });
+}
+
+function updateCanvasCursor() {
+  const canvas = $("#editor-canvas");
+  if (state.activeTool === "eraser") {
+    canvas.style.cursor = "crosshair";
+  } else if (state.activeTool === "move") {
+    canvas.style.cursor = "grab";
+  } else {
+    canvas.style.cursor = "default";
+  }
+}
+
+function openEditor(index) {
+  state.editingIndex = index;
+  state.editingFilename = `${String(index + 1).padStart(2, "0")}.png`;
+  state.editorOpen = true;
+  state.undoStack = [];
+  state.subjectOffsetX = 0;
+  state.subjectOffsetY = 0;
+  state.subjectScale = 1.0;
+  state.moveBaseImageData = null;
+
+  $("#result").hidden = true;
+  $("#editor").hidden = false;
+  $("#editor-title").textContent = `${state.editingFilename} を編集中`;
+
+  // base画像（テキストなし版）をCanvasにロード
+  const canvas = $("#editor-canvas");
+  const ctx = canvas.getContext("2d");
+  const img = new Image();
+  img.crossOrigin = "anonymous";
+  img.onload = () => {
+    ctx.clearRect(0, 0, 370, 320);
+    ctx.drawImage(img, 0, 0, 370, 320);
+    pushUndo();
+  };
+  const baseName = state.editingFilename.replace(".png", "_base.png");
+  img.src = `/api/stamp/${state.sessionId}/${baseName}?t=${Date.now()}`;
+
+  // ツールをリセット
+  state.activeTool = "eraser";
+  $$(".editor-tool-btn").forEach((b) => {
+    b.classList.toggle("active", b.dataset.tool === "eraser");
+  });
+  $("#eraser-controls").hidden = false;
+  $("#move-controls").hidden = true;
+  $("#text-controls").hidden = true;
+  updateCanvasCursor();
+
+  // テキスト入力欄に現在のメッセージを設定
+  const currentMsg = state.stampMessages[index] || "";
+  $("#editor-text-input").value = currentMsg || "";
+  const currentPos = state.stampTextPositions[index] || "none";
+  $$(".text-pos-btn").forEach((b) => {
+    b.classList.toggle("active", b.dataset.pos === (currentPos || "none"));
+  });
+
+  updateNavButtons();
+  window.scrollTo({ top: 0, behavior: "smooth" });
+}
+
+function closeEditor() {
+  state.editorOpen = false;
+  $("#editor").hidden = true;
+  $("#result").hidden = false;
+}
+
+// --- Eraser ---
+function onCanvasPointerDown(e) {
+  if (state.activeTool === "eraser") {
+    isErasing = true;
+    pushUndo();
+    eraseAt(e);
+  } else if (state.activeTool === "move") {
+    state.isDragging = true;
+    const rect = e.target.getBoundingClientRect();
+    state.dragStartX = e.clientX - rect.left;
+    state.dragStartY = e.clientY - rect.top;
+    e.target.style.cursor = "grabbing";
+  }
+}
+
+function onCanvasPointerMove(e) {
+  if (state.activeTool === "eraser" && isErasing) {
+    eraseAt(e);
+  } else if (state.activeTool === "move" && state.isDragging) {
+    const rect = e.target.getBoundingClientRect();
+    const x = e.clientX - rect.left;
+    const y = e.clientY - rect.top;
+    const scaleX = 370 / rect.width;
+    const scaleY = 320 / rect.height;
+    state.subjectOffsetX += (x - state.dragStartX) * scaleX;
+    state.subjectOffsetY += (y - state.dragStartY) * scaleY;
+    state.dragStartX = x;
+    state.dragStartY = y;
+    redrawMoveCanvas();
+  }
+}
+
+function onCanvasPointerUp(e) {
+  if (state.activeTool === "move" && state.isDragging) {
+    e.target.style.cursor = "grab";
+  }
+  isErasing = false;
+  state.isDragging = false;
+}
+
+function eraseAt(e) {
+  const canvas = $("#editor-canvas");
+  const ctx = canvas.getContext("2d");
+  const rect = canvas.getBoundingClientRect();
+  const scaleX = 370 / rect.width;
+  const scaleY = 320 / rect.height;
+  const x = (e.clientX - rect.left) * scaleX;
+  const y = (e.clientY - rect.top) * scaleY;
+
+  ctx.save();
+  ctx.globalCompositeOperation = "destination-out";
+  ctx.beginPath();
+  ctx.arc(x, y, state.brushSize / 2, 0, Math.PI * 2);
+  ctx.fill();
+  ctx.restore();
+}
+
+function pushUndo() {
+  const canvas = $("#editor-canvas");
+  const ctx = canvas.getContext("2d");
+  state.undoStack.push(ctx.getImageData(0, 0, 370, 320));
+  if (state.undoStack.length > 10) state.undoStack.shift();
+}
+
+function undoErase() {
+  if (state.undoStack.length <= 1) return;
+  state.undoStack.pop();
+  const prev = state.undoStack[state.undoStack.length - 1];
+  const canvas = $("#editor-canvas");
+  const ctx = canvas.getContext("2d");
+  ctx.putImageData(prev, 0, 0);
+}
+
+// --- Move/Zoom ---
+function redrawMoveCanvas() {
+  if (!state.moveBaseImageData) return;
+  const canvas = $("#editor-canvas");
+  const ctx = canvas.getContext("2d");
+
+  const tempCanvas = document.createElement("canvas");
+  tempCanvas.width = 370;
+  tempCanvas.height = 320;
+  const tempCtx = tempCanvas.getContext("2d");
+  tempCtx.putImageData(state.moveBaseImageData, 0, 0);
+
+  ctx.clearRect(0, 0, 370, 320);
+  ctx.save();
+  ctx.translate(370 / 2 + state.subjectOffsetX, 320 / 2 + state.subjectOffsetY);
+  ctx.scale(state.subjectScale, state.subjectScale);
+  ctx.translate(-370 / 2, -320 / 2);
+  ctx.drawImage(tempCanvas, 0, 0);
+  ctx.restore();
+}
+
+function resetPosition() {
+  state.subjectOffsetX = 0;
+  state.subjectOffsetY = 0;
+  state.subjectScale = 1.0;
+  $("#zoom-slider").value = 100;
+  $("#zoom-val").textContent = "100";
+  redrawMoveCanvas();
+}
+
+// --- Save ---
+async function saveEditedStamp() {
+  const canvas = $("#editor-canvas");
+  const saveBtn = $("#editor-save");
+  saveBtn.disabled = true;
+  saveBtn.textContent = "保存中...";
+
+  try {
+    const blob = await new Promise((resolve) => canvas.toBlob(resolve, "image/png"));
+
+    // テキスト情報を取得
+    const text = $("#editor-text-input").value.trim();
+    const activePosBtn = $(".text-pos-btn.active");
+    const textPosition = activePosBtn ? activePosBtn.dataset.pos : "none";
+
+    const formData = new FormData();
+    formData.append("image", blob, state.editingFilename);
+    formData.append("text", text);
+    formData.append("text_position", textPosition);
+
+    const res = await fetch(
+      `/api/stamp/${state.sessionId}/${state.editingFilename}`,
+      { method: "PUT", body: formData }
+    );
+
+    if (!res.ok) {
+      const data = await res.json();
+      throw new Error(data.error || "保存に失敗しました");
+    }
+
+    // ステートを更新
+    state.stampMessages[state.editingIndex] = text;
+    state.stampTextPositions[state.editingIndex] = textPosition === "none" ? null : textPosition;
+
+    // サムネイルを更新（キャッシュバスト）
+    const thumb = $(`#result-grid .result-item[data-index="${state.editingIndex}"] img`);
+    if (thumb) {
+      thumb.src = `/api/stamp/${state.sessionId}/${state.editingFilename}?t=${Date.now()}`;
+    }
+
+    // ダウンロードリンクも更新
+    $("#btn-download").href = `/api/download/${state.sessionId}?t=${Date.now()}`;
+
+    closeEditor();
+  } catch (e) {
+    alert(e.message);
+  } finally {
+    saveBtn.disabled = false;
+    saveBtn.textContent = "保存する ✓";
+  }
+}
+
+// --- Navigation ---
+function navigateStamp(delta) {
+  const newIndex = state.editingIndex + delta;
+  if (newIndex < 0 || newIndex > 7) return;
+  openEditor(newIndex);
+}
+
+function updateNavButtons() {
+  $("#editor-prev").disabled = state.editingIndex <= 0;
+  $("#editor-next").disabled = state.editingIndex >= 7;
+}
+
 // --- Init ---
 document.addEventListener("DOMContentLoaded", () => {
   initUpload();
   initModeSelection();
   initLineUpload();
+  initEditor();
 
   $("#btn-restart").addEventListener("click", resetApp);
   $("#btn-retry").addEventListener("click", resetApp);

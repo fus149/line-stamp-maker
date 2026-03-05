@@ -116,7 +116,7 @@ async def generate_stamps(
         msg_list = [None] * 8
 
     try:
-        process_all_images(input_dir, output_dir, msg_list)
+        result = process_all_images(input_dir, output_dir, msg_list)
         make_preview(output_dir)
         create_zip(output_dir)
     except Exception as e:
@@ -126,6 +126,7 @@ async def generate_stamps(
         "session_id": session_id,
         "messages": msg_list,
         "stamps": [f"{i:02d}.png" for i in range(1, 9)],
+        "text_positions": result["text_positions"],
     }
 
 
@@ -135,6 +136,64 @@ async def get_stamp(session_id: str, filename: str):
     if not path.exists():
         return JSONResponse({"error": "ファイルが見つかりません"}, status_code=404)
     return FileResponse(path, media_type="image/png")
+
+
+@app.put("/api/stamp/{session_id}/{filename}")
+async def update_stamp(
+    session_id: str,
+    filename: str,
+    image: UploadFile = File(...),
+    text: str = Form(""),
+    text_position: str = Form("none"),
+):
+    """編集済みスタンプ画像を上書き保存する。"""
+    import re
+    from PIL import Image as PILImage
+    from scripts.process_images import _add_text, generate_main_and_tab
+
+    # ファイル名バリデーション（01.png〜08.png のみ）
+    if not re.match(r"^0[1-8]\.png$", filename):
+        return JSONResponse({"error": "無効なファイル名です"}, status_code=400)
+
+    output_dir = SESSIONS_DIR / session_id / "output"
+    stamp_path = output_dir / filename
+    base_path = output_dir / filename.replace(".png", "_base.png")
+
+    if not stamp_path.exists():
+        return JSONResponse({"error": "スタンプが見つかりません"}, status_code=404)
+
+    # アップロードされたbase画像を検証
+    content = await image.read()
+    try:
+        img = PILImage.open(io.BytesIO(content))
+        if img.size != (370, 320):
+            return JSONResponse({"error": f"画像サイズが不正です: {img.size}"}, status_code=400)
+        if img.mode != "RGBA":
+            img = img.convert("RGBA")
+    except Exception:
+        return JSONResponse({"error": "無効な画像データです"}, status_code=400)
+
+    # base画像を上書き保存
+    img.save(str(base_path), "PNG")
+
+    # テキストがあればサーバー側で描画して最終画像を作成
+    if text.strip() and text_position in ("top", "bottom"):
+        final_img = img.copy()
+        final_img = _add_text(final_img, text.strip(), text_position)
+        final_img.save(str(stamp_path), "PNG")
+    else:
+        # テキストなし: base画像をそのまま最終画像にする
+        img.save(str(stamp_path), "PNG")
+
+    # 01.png編集時はmain/tab画像を再生成
+    if filename == "01.png":
+        generate_main_and_tab(output_dir)
+
+    # preview.pngとZIPを再生成
+    make_preview(output_dir)
+    create_zip(output_dir)
+
+    return {"status": "ok", "filename": filename}
 
 
 @app.get("/api/preview/{session_id}")
