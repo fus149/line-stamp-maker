@@ -26,6 +26,21 @@ const state = {
   stampMessages: [],
   stampTextPositions: [],
   moveBaseImageData: null,
+  // テキスト拡張
+  selectedFont: "zen-maru",
+  textColor: "white",
+  vertical: false,
+  stampFonts: [],
+  stampTextColors: [],
+  stampVerticals: [],
+};
+
+const FONT_FAMILY_MAP = {
+  "zen-maru": "Zen Maru Gothic",
+  "noto-sans": "Noto Sans JP",
+  "zen-kaku": "Zen Kaku Gothic",
+  "kosugi-maru": "Kosugi Maru",
+  "hachi-maru": "Hachi Maru Pop",
 };
 
 // --- DOM ---
@@ -574,7 +589,8 @@ function initEditor() {
   $("#editor-back").addEventListener("click", closeEditor);
   $("#editor-cancel").addEventListener("click", closeEditor);
   $("#editor-save").addEventListener("click", saveEditedStamp);
-  $("#btn-undo").addEventListener("click", undoErase);
+  $("#btn-undo-step").addEventListener("click", undoOneStep);
+  $("#btn-reset").addEventListener("click", resetToOriginal);
   $("#btn-reset-pos").addEventListener("click", resetPosition);
   $("#editor-prev").addEventListener("click", () => navigateStamp(-1));
   $("#editor-next").addEventListener("click", () => navigateStamp(1));
@@ -584,6 +600,36 @@ function initEditor() {
     btn.addEventListener("click", () => {
       $$(".text-pos-btn").forEach((b) => b.classList.remove("active"));
       btn.classList.add("active");
+      renderTextPreview();
+    });
+  });
+
+  // テキスト入力でリアルタイムプレビュー
+  $("#editor-text-input").addEventListener("input", renderTextPreview);
+
+  // フォント選択
+  $("#font-select").addEventListener("change", (e) => {
+    state.selectedFont = e.target.value;
+    renderTextPreview();
+  });
+
+  // 文字色ボタン
+  $$(".color-btn").forEach((btn) => {
+    btn.addEventListener("click", () => {
+      $$(".color-btn").forEach((b) => b.classList.remove("active"));
+      btn.classList.add("active");
+      state.textColor = btn.dataset.color;
+      renderTextPreview();
+    });
+  });
+
+  // 方向ボタン (横書き/縦書き)
+  $$(".dir-btn").forEach((btn) => {
+    btn.addEventListener("click", () => {
+      $$(".dir-btn").forEach((b) => b.classList.remove("active"));
+      btn.classList.add("active");
+      state.vertical = btn.dataset.dir === "vertical";
+      renderTextPreview();
     });
   });
 }
@@ -655,6 +701,20 @@ function openEditor(index) {
     b.classList.toggle("active", b.dataset.pos === (currentPos || "none"));
   });
 
+  // フォント・色・方向を復元
+  state.selectedFont = state.stampFonts[index] || "zen-maru";
+  state.textColor = state.stampTextColors[index] || "white";
+  state.vertical = state.stampVerticals[index] || false;
+  $("#font-select").value = state.selectedFont;
+  $$(".color-btn").forEach((b) => b.classList.toggle("active", b.dataset.color === state.textColor));
+  $$(".dir-btn").forEach((b) => {
+    const isVert = b.dataset.dir === "vertical";
+    b.classList.toggle("active", isVert === state.vertical);
+  });
+
+  // テキストプレビューを描画
+  renderTextPreview();
+
   updateNavButtons();
   window.scrollTo({ top: 0, behavior: "smooth" });
 }
@@ -663,6 +723,9 @@ function closeEditor() {
   state.editorOpen = false;
   $("#editor").hidden = true;
   $("#result").hidden = false;
+  // テキストプレビューをクリア
+  const previewCanvas = $("#text-preview-canvas");
+  previewCanvas.getContext("2d").clearRect(0, 0, 370, 320);
 }
 
 // --- Eraser ---
@@ -713,11 +776,19 @@ function eraseAt(e) {
   const scaleY = 320 / rect.height;
   const x = (e.clientX - rect.left) * scaleX;
   const y = (e.clientY - rect.top) * scaleY;
+  const radius = state.brushSize / 2;
 
   ctx.save();
   ctx.globalCompositeOperation = "destination-out";
+  // ぼかし丸: radialGradient で中心→外へ徐々に透明に
+  const gradient = ctx.createRadialGradient(x, y, 0, x, y, radius);
+  gradient.addColorStop(0, "rgba(0,0,0,1)");
+  gradient.addColorStop(0.5, "rgba(0,0,0,0.8)");
+  gradient.addColorStop(0.8, "rgba(0,0,0,0.3)");
+  gradient.addColorStop(1, "rgba(0,0,0,0)");
+  ctx.fillStyle = gradient;
   ctx.beginPath();
-  ctx.arc(x, y, state.brushSize / 2, 0, Math.PI * 2);
+  ctx.arc(x, y, radius, 0, Math.PI * 2);
   ctx.fill();
   ctx.restore();
 }
@@ -729,13 +800,137 @@ function pushUndo() {
   if (state.undoStack.length > 10) state.undoStack.shift();
 }
 
-function undoErase() {
+function undoOneStep() {
   if (state.undoStack.length <= 1) return;
   state.undoStack.pop();
   const prev = state.undoStack[state.undoStack.length - 1];
   const canvas = $("#editor-canvas");
   const ctx = canvas.getContext("2d");
   ctx.putImageData(prev, 0, 0);
+}
+
+function resetToOriginal() {
+  if (state.undoStack.length === 0) return;
+  const original = state.undoStack[0];
+  const canvas = $("#editor-canvas");
+  const ctx = canvas.getContext("2d");
+  ctx.putImageData(original, 0, 0);
+  state.undoStack = [original];
+}
+
+// --- Text Preview ---
+function renderTextPreview() {
+  const canvas = $("#text-preview-canvas");
+  const ctx = canvas.getContext("2d");
+  ctx.clearRect(0, 0, 370, 320);
+
+  const text = $("#editor-text-input").value.trim();
+  const activePosBtn = $(".text-pos-btn.active");
+  const textPosition = activePosBtn ? activePosBtn.dataset.pos : "none";
+
+  if (!text || textPosition === "none") return;
+
+  // サーバー側の定数に合わせる
+  const fontSize = 32;
+  const margin = 15;
+  const outlineWidth = 3;
+  const textAreaWidth = 55;
+  const fontFamily = FONT_FAMILY_MAP[state.selectedFont] || "Zen Maru Gothic";
+
+  // 色設定
+  let fillColor, strokeColor;
+  if (state.textColor === "black") {
+    fillColor = "rgba(0,0,0,1)";
+    strokeColor = "rgba(255,255,255,1)";
+  } else {
+    fillColor = "rgba(255,255,255,1)";
+    strokeColor = "rgba(0,0,0,1)";
+  }
+
+  ctx.font = `${fontSize}px "${fontFamily}", sans-serif`;
+  ctx.lineJoin = "round";
+
+  if (state.vertical) {
+    renderVerticalText(ctx, text, textPosition, fontSize, margin, outlineWidth, textAreaWidth, fillColor, strokeColor);
+  } else {
+    renderHorizontalText(ctx, text, textPosition, fontSize, margin, outlineWidth, textAreaWidth, fillColor, strokeColor);
+  }
+}
+
+function renderHorizontalText(ctx, text, pos, fontSize, margin, outlineWidth, textAreaWidth, fillColor, strokeColor) {
+  ctx.textAlign = "center";
+  ctx.textBaseline = "top";
+
+  const metrics = ctx.measureText(text);
+  const textH = fontSize;
+  let x, y;
+
+  if (pos === "bottom") {
+    x = 370 / 2;
+    y = 320 - textH - margin - 5;
+  } else if (pos === "top") {
+    x = 370 / 2;
+    y = margin + 5;
+  } else if (pos === "left") {
+    x = margin + textAreaWidth / 2;
+    y = (320 - textH) / 2;
+  } else if (pos === "right") {
+    x = 370 - margin - textAreaWidth / 2;
+    y = (320 - textH) / 2;
+  }
+
+  // 縁取り
+  ctx.strokeStyle = strokeColor;
+  ctx.lineWidth = outlineWidth * 2;
+  ctx.strokeText(text, x, y);
+  // 本文
+  ctx.fillStyle = fillColor;
+  ctx.fillText(text, x, y);
+}
+
+function renderVerticalText(ctx, text, pos, fontSize, margin, outlineWidth, textAreaWidth, fillColor, strokeColor) {
+  ctx.textAlign = "center";
+  ctx.textBaseline = "top";
+
+  // 各文字のサイズを計算
+  const spacing = 2;
+  let totalH = 0;
+  const charHeights = [];
+  for (const ch of text) {
+    const m = ctx.measureText(ch);
+    const h = fontSize;
+    charHeights.push(h);
+    totalH += h + spacing;
+  }
+  totalH -= spacing;
+
+  let cx, yStart;
+  if (pos === "left") {
+    cx = margin + fontSize / 2 + 5;
+    yStart = (320 - totalH) / 2;
+  } else if (pos === "right") {
+    cx = 370 - margin - fontSize / 2 - 5;
+    yStart = (320 - totalH) / 2;
+  } else if (pos === "top") {
+    cx = 370 / 2;
+    yStart = margin + 5;
+  } else if (pos === "bottom") {
+    cx = 370 / 2;
+    yStart = 320 - totalH - margin - 5;
+  }
+
+  let yCursor = yStart;
+  for (let i = 0; i < text.length; i++) {
+    const ch = text[i];
+    // 縁取り
+    ctx.strokeStyle = strokeColor;
+    ctx.lineWidth = outlineWidth * 2;
+    ctx.strokeText(ch, cx, yCursor);
+    // 本文
+    ctx.fillStyle = fillColor;
+    ctx.fillText(ch, cx, yCursor);
+    yCursor += charHeights[i] + spacing;
+  }
 }
 
 // --- Move/Zoom ---
@@ -787,6 +982,9 @@ async function saveEditedStamp() {
     formData.append("image", blob, state.editingFilename);
     formData.append("text", text);
     formData.append("text_position", textPosition);
+    formData.append("font_id", state.selectedFont);
+    formData.append("text_color", state.textColor);
+    formData.append("vertical", state.vertical);
 
     const res = await fetch(
       `/api/stamp/${state.sessionId}/${state.editingFilename}`,
@@ -801,6 +999,9 @@ async function saveEditedStamp() {
     // ステートを更新
     state.stampMessages[state.editingIndex] = text;
     state.stampTextPositions[state.editingIndex] = textPosition === "none" ? null : textPosition;
+    state.stampFonts[state.editingIndex] = state.selectedFont;
+    state.stampTextColors[state.editingIndex] = state.textColor;
+    state.stampVerticals[state.editingIndex] = state.vertical;
 
     // サムネイルを更新（キャッシュバスト）
     const thumb = $(`#result-grid .result-item[data-index="${state.editingIndex}"] img`);

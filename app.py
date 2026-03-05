@@ -145,6 +145,9 @@ async def update_stamp(
     image: UploadFile = File(...),
     text: str = Form(""),
     text_position: str = Form("none"),
+    font_id: str = Form("zen-maru"),
+    text_color: str = Form("white"),
+    vertical: str = Form("false"),
 ):
     """編集済みスタンプ画像を上書き保存する。"""
     import re
@@ -177,12 +180,16 @@ async def update_stamp(
     img.save(str(base_path), "PNG")
 
     # テキストがあればサーバー側で描画して最終画像を作成
-    if text.strip() and text_position in ("top", "bottom"):
+    valid_positions = ("top", "bottom", "left", "right")
+    is_vertical = vertical.lower() in ("true", "1", "yes")
+    if text.strip() and text_position in valid_positions:
         final_img = img.copy()
-        final_img = _add_text(final_img, text.strip(), text_position)
+        final_img = _add_text(
+            final_img, text.strip(), text_position,
+            font_id=font_id, text_color=text_color, vertical=is_vertical,
+        )
         final_img.save(str(stamp_path), "PNG")
     else:
-        # テキストなし: base画像をそのまま最終画像にする
         img.save(str(stamp_path), "PNG")
 
     # 01.png編集時はmain/tab画像を再生成

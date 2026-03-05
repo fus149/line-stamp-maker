@@ -281,7 +281,8 @@
               ブラシサイズ: <span id="brush-size-val">20</span>px
             </label>
             <input type="range" id="brush-size" min="5" max="80" value="20" class="range-input" />
-            <button class="btn btn-ghost btn-sm" id="btn-undo">↩ 元に戻す</button>
+            <button class="btn btn-ghost btn-sm" id="btn-undo-step">↩ 一つ前へ戻る</button>
+            <button class="btn btn-ghost btn-sm btn-reset" id="btn-reset">⟲ 元に戻す</button>
           </div>
 
           <!-- 移動・拡大用コントロール -->
@@ -294,18 +295,48 @@
           </div>
 
           <!-- テキスト変更用コントロール -->
-          <div class="editor-controls" id="text-controls" hidden>
-            <input type="text" id="editor-text-input" class="msg-input" maxlength="20" placeholder="メッセージを入力" />
-            <div class="text-pos-btns">
-              <button class="btn btn-ghost btn-sm text-pos-btn active" data-pos="bottom">下に配置</button>
-              <button class="btn btn-ghost btn-sm text-pos-btn" data-pos="top">上に配置</button>
-              <button class="btn btn-ghost btn-sm text-pos-btn" data-pos="none">文字なし</button>
+          <div class="editor-controls-stack" id="text-controls" hidden>
+            <div class="editor-controls">
+              <input type="text" id="editor-text-input" class="msg-input" maxlength="20" placeholder="メッセージを入力" />
+            </div>
+            <div class="editor-controls">
+              <label class="control-label">フォント:</label>
+              <select id="font-select" class="font-select">
+                <option value="zen-maru">丸ゴシック</option>
+                <option value="noto-sans">ゴシック</option>
+                <option value="zen-kaku">角ゴシック</option>
+                <option value="kosugi-maru">コスギ丸</option>
+                <option value="hachi-maru">手書き風</option>
+              </select>
+            </div>
+            <div class="editor-controls">
+              <label class="control-label">文字色:</label>
+              <div class="toggle-btns">
+                <button class="btn btn-ghost btn-sm color-btn active" data-color="white">白字</button>
+                <button class="btn btn-ghost btn-sm color-btn" data-color="black">黒字</button>
+              </div>
+              <label class="control-label">方向:</label>
+              <div class="toggle-btns">
+                <button class="btn btn-ghost btn-sm dir-btn active" data-dir="horizontal">横書き</button>
+                <button class="btn btn-ghost btn-sm dir-btn" data-dir="vertical">縦書き</button>
+              </div>
+            </div>
+            <div class="editor-controls">
+              <label class="control-label">配置:</label>
+              <div class="toggle-btns">
+                <button class="btn btn-ghost btn-sm text-pos-btn" data-pos="top">上</button>
+                <button class="btn btn-ghost btn-sm text-pos-btn active" data-pos="bottom">下</button>
+                <button class="btn btn-ghost btn-sm text-pos-btn" data-pos="left">左</button>
+                <button class="btn btn-ghost btn-sm text-pos-btn" data-pos="right">右</button>
+                <button class="btn btn-ghost btn-sm text-pos-btn" data-pos="none">なし</button>
+              </div>
             </div>
           </div>
 
           <!-- Canvas表示エリア -->
           <div class="editor-canvas-wrap" id="editor-canvas-wrap">
             <canvas id="editor-canvas" width="370" height="320"></canvas>
+            <canvas id="text-preview-canvas" width="370" height="320"></canvas>
           </div>
 
           <!-- アクション -->

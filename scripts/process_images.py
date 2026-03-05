@@ -38,33 +38,51 @@ MAX_INPUT_DIMENSION = 1500
 # 並列処理ワーカー数
 PARALLEL_WORKERS = 4
 
-# --- フォント候補（丸ゴシック優先） ---
+# --- バンドルフォント ---
+FONTS_DIR = Path(__file__).resolve().parent.parent / "static" / "fonts"
+FONT_MAP = {
+    "zen-maru": FONTS_DIR / "ZenMaruGothic-Medium.ttf",
+    "noto-sans": FONTS_DIR / "NotoSansJP-Bold.ttf",
+    "zen-kaku": FONTS_DIR / "ZenKakuGothicNew-Bold.ttf",
+    "kosugi-maru": FONTS_DIR / "KosugiMaru-Regular.ttf",
+    "hachi-maru": FONTS_DIR / "HachiMaruPop-Regular.ttf",
+}
+DEFAULT_FONT_ID = "zen-maru"
+
+# フォールバック候補（バンドルフォントがない場合）
 FONT_CANDIDATES = [
-    # macOS
     "/System/Library/Fonts/ヒラギノ丸ゴ ProN W4.ttc",
-    "/System/Library/Fonts/Hiragino Sans GB W3.otf",
     "/System/Library/Fonts/HiraginoSans-W6.ttc",
-    # Linux (rounded-mgenplus等を手動インストール)
     "/usr/share/fonts/truetype/rounded-mgenplus/rounded-mgenplus-1c-medium.ttf",
-    # プロジェクト内バンドルフォント
-    str(Path(__file__).resolve().parent.parent / "fonts" / "font.ttf"),
 ]
 
+TEXT_AREA_WIDTH = 55  # 左右配置時のテキスト領域幅
 
-def _load_font(font_path: Optional[str] = None, size: int = 32) -> ImageFont.FreeTypeFont:
-    """丸ゴシックフォントをロードする。"""
-    if font_path and os.path.exists(font_path):
-        return ImageFont.truetype(font_path, size)
 
+def _load_font(font_id: Optional[str] = None, size: int = 32) -> ImageFont.FreeTypeFont:
+    """フォントIDまたはパスからフォントをロードする。"""
+    # font_id が FONT_MAP のキーの場合
+    if font_id and font_id in FONT_MAP:
+        path = FONT_MAP[font_id]
+        if path.exists():
+            return ImageFont.truetype(str(path), size)
+
+    # 直接パス指定（後方互換）
+    if font_id and os.path.exists(str(font_id)):
+        return ImageFont.truetype(str(font_id), size)
+
+    # デフォルトのバンドルフォント
+    default_path = FONT_MAP.get(DEFAULT_FONT_ID)
+    if default_path and default_path.exists():
+        return ImageFont.truetype(str(default_path), size)
+
+    # システムフォントにフォールバック
     for candidate in FONT_CANDIDATES:
         if os.path.exists(candidate):
             return ImageFont.truetype(candidate, size)
 
-    print("警告: 丸ゴシックフォントが見つかりません。デフォルトフォントを使用します。")
-    try:
-        return ImageFont.truetype("/System/Library/Fonts/Supplemental/Arial Unicode.ttf", size)
-    except OSError:
-        return ImageFont.load_default()
+    print("警告: フォントが見つかりません。デフォルトフォントを使用します。")
+    return ImageFont.load_default()
 
 
 def correct_orientation(img: Image.Image) -> Image.Image:
@@ -202,10 +220,15 @@ def _center_and_resize(
     bbox = _get_subject_bbox(img)
     cropped = img.crop(bbox)
 
-    available_w = STAMP_WIDTH - (MARGIN * 2)
-    if has_text:
+    # テキスト配置に応じた利用可能領域を計算
+    if has_text and text_position in ("left", "right"):
+        available_w = STAMP_WIDTH - (MARGIN * 2) - TEXT_AREA_WIDTH
+        available_h = STAMP_HEIGHT - (MARGIN * 2)
+    elif has_text and text_position in ("top", "bottom"):
+        available_w = STAMP_WIDTH - (MARGIN * 2)
         available_h = STAMP_HEIGHT - (MARGIN * 2) - TEXT_AREA_HEIGHT
     else:
+        available_w = STAMP_WIDTH - (MARGIN * 2)
         available_h = STAMP_HEIGHT - (MARGIN * 2)
 
     ratio = min(available_w / cropped.width, available_h / cropped.height)
@@ -215,57 +238,152 @@ def _center_and_resize(
 
     canvas = Image.new("RGBA", (STAMP_WIDTH, STAMP_HEIGHT), (0, 0, 0, 0))
 
-    x = (STAMP_WIDTH - new_w) // 2
-
     if has_text and text_position == "top":
-        # テキストが上 → 被写体は下
+        x = (STAMP_WIDTH - new_w) // 2
         y = MARGIN + TEXT_AREA_HEIGHT + (available_h - new_h) // 2
     elif has_text and text_position == "bottom":
-        # テキストが下 → 被写体は上
+        x = (STAMP_WIDTH - new_w) // 2
         y = MARGIN + (available_h - new_h) // 2
+    elif has_text and text_position == "left":
+        x = MARGIN + TEXT_AREA_WIDTH + (available_w - new_w) // 2
+        y = (STAMP_HEIGHT - new_h) // 2
+    elif has_text and text_position == "right":
+        x = MARGIN + (available_w - new_w) // 2
+        y = (STAMP_HEIGHT - new_h) // 2
     else:
+        x = (STAMP_WIDTH - new_w) // 2
         y = (STAMP_HEIGHT - new_h) // 2
 
     canvas.paste(cropped, (x, y), cropped)
     return canvas
 
 
+def _draw_outlined_text(
+    draw: ImageDraw.ImageDraw,
+    xy: Tuple[int, int],
+    text: str,
+    font: ImageFont.FreeTypeFont,
+    fill: Tuple[int, int, int, int],
+    outline_fill: Tuple[int, int, int, int],
+    outline_width: int = OUTLINE_WIDTH,
+) -> None:
+    """縁取り付きテキストを描画する。"""
+    x, y = xy
+    for dx in range(-outline_width, outline_width + 1):
+        for dy in range(-outline_width, outline_width + 1):
+            if dx * dx + dy * dy <= outline_width * outline_width + 1:
+                draw.text((x + dx, y + dy), text, font=font, fill=outline_fill)
+    draw.text((x, y), text, font=font, fill=fill)
+
+
 def _add_text(
     img: Image.Image,
     text: str,
     text_position: str,
-    font_path: Optional[str] = None,
+    font_id: Optional[str] = None,
     font_size: int = 32,
+    text_color: str = "white",
+    vertical: bool = False,
 ) -> Image.Image:
-    """白文字＋黒縁取りのテキストを追加する。"""
-    font = _load_font(font_path, font_size)
+    """テキストを追加する。色・位置・縦横書きに対応。"""
+    font = _load_font(font_id, font_size)
     draw = ImageDraw.Draw(img)
 
-    max_text_width = STAMP_WIDTH - (MARGIN * 2) - 10
-    text = _wrap_text(text, font, max_text_width)
+    # テキスト色の設定
+    if text_color == "black":
+        fill = (0, 0, 0, 255)
+        outline = (255, 255, 255, 255)
+    else:
+        fill = (255, 255, 255, 255)
+        outline = (0, 0, 0, 255)
+
+    if vertical:
+        _add_text_vertical(draw, text, text_position, font, fill, outline)
+    else:
+        _add_text_horizontal(draw, text, text_position, font, fill, outline)
+
+    return img
+
+
+def _add_text_horizontal(
+    draw: ImageDraw.ImageDraw,
+    text: str,
+    text_position: str,
+    font: ImageFont.FreeTypeFont,
+    fill: Tuple[int, int, int, int],
+    outline: Tuple[int, int, int, int],
+) -> None:
+    """横書きテキストを描画する。"""
+    if text_position in ("left", "right"):
+        max_w = TEXT_AREA_WIDTH - 10
+    else:
+        max_w = STAMP_WIDTH - (MARGIN * 2) - 10
+    text = _wrap_text(text, font, max_w)
 
     bbox = draw.textbbox((0, 0), text, font=font)
     text_w = bbox[2] - bbox[0]
     text_h = bbox[3] - bbox[1]
 
-    x = (STAMP_WIDTH - text_w) // 2
-
     if text_position == "bottom":
+        x = (STAMP_WIDTH - text_w) // 2
         y = STAMP_HEIGHT - text_h - MARGIN - 5
+    elif text_position == "top":
+        x = (STAMP_WIDTH - text_w) // 2
+        y = MARGIN + 5
+    elif text_position == "left":
+        x = MARGIN + (TEXT_AREA_WIDTH - text_w) // 2
+        y = (STAMP_HEIGHT - text_h) // 2
+    elif text_position == "right":
+        x = STAMP_WIDTH - MARGIN - TEXT_AREA_WIDTH + (TEXT_AREA_WIDTH - text_w) // 2
+        y = (STAMP_HEIGHT - text_h) // 2
     else:
+        x = (STAMP_WIDTH - text_w) // 2
         y = MARGIN + 5
 
-    # 黒縁取り
-    for dx in range(-OUTLINE_WIDTH, OUTLINE_WIDTH + 1):
-        for dy in range(-OUTLINE_WIDTH, OUTLINE_WIDTH + 1):
-            if dx * dx + dy * dy <= OUTLINE_WIDTH * OUTLINE_WIDTH + 1:
-                draw.text(
-                    (x + dx, y + dy), text, font=font, fill=(0, 0, 0, 255), anchor=None
-                )
+    _draw_outlined_text(draw, (x, y), text, font, fill, outline)
 
-    # 白文字
-    draw.text((x, y), text, font=font, fill=(255, 255, 255, 255))
-    return img
+
+def _add_text_vertical(
+    draw: ImageDraw.ImageDraw,
+    text: str,
+    text_position: str,
+    font: ImageFont.FreeTypeFont,
+    fill: Tuple[int, int, int, int],
+    outline: Tuple[int, int, int, int],
+) -> None:
+    """縦書きテキストを描画する（1文字ずつ縦に並べる）。"""
+    # 各文字のサイズを計算
+    char_sizes = []
+    for ch in text:
+        bbox = draw.textbbox((0, 0), ch, font=font)
+        char_sizes.append((bbox[2] - bbox[0], bbox[3] - bbox[1]))
+
+    max_char_w = max(w for w, h in char_sizes) if char_sizes else 0
+    spacing = 2
+    total_h = sum(h for _, h in char_sizes) + spacing * (len(text) - 1) if text else 0
+
+    if text_position == "left":
+        cx = MARGIN + max_char_w // 2 + 5
+        y_start = (STAMP_HEIGHT - total_h) // 2
+    elif text_position == "right":
+        cx = STAMP_WIDTH - MARGIN - max_char_w // 2 - 5
+        y_start = (STAMP_HEIGHT - total_h) // 2
+    elif text_position == "top":
+        cx = STAMP_WIDTH // 2
+        y_start = MARGIN + 5
+    elif text_position == "bottom":
+        cx = STAMP_WIDTH // 2
+        y_start = STAMP_HEIGHT - total_h - MARGIN - 5
+    else:
+        cx = STAMP_WIDTH // 2
+        y_start = MARGIN + 5
+
+    y_cursor = y_start
+    for i, ch in enumerate(text):
+        ch_w, ch_h = char_sizes[i]
+        x = cx - ch_w // 2
+        _draw_outlined_text(draw, (x, y_cursor), ch, font, fill, outline)
+        y_cursor += ch_h + spacing
 
 
 def process_single_image(
@@ -327,7 +445,7 @@ def process_single_image(
 
     # 文字追加
     if has_text:
-        img = _add_text(img, message, text_position, font_path, font_size)
+        img = _add_text(img, message, text_position, font_id=font_path, font_size=font_size)
 
     # 保存
     img.save(str(output_path), "PNG")
