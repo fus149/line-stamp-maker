@@ -612,7 +612,7 @@ function openEditor(index) {
   $("#editor").hidden = false;
   $("#editor-title").textContent = `${state.editingFilename} を編集中`;
 
-  // base画像（テキストなし版）をCanvasにロード
+  // base画像（テキストなし版）をCanvasにロード。なければ通常画像にフォールバック
   const canvas = $("#editor-canvas");
   const ctx = canvas.getContext("2d");
   const img = new Image();
@@ -623,6 +623,17 @@ function openEditor(index) {
     pushUndo();
   };
   const baseName = state.editingFilename.replace(".png", "_base.png");
+  img.onerror = () => {
+    // base画像がない場合（旧セッション）は通常画像を読み込む
+    const fallback = new Image();
+    fallback.crossOrigin = "anonymous";
+    fallback.onload = () => {
+      ctx.clearRect(0, 0, 370, 320);
+      ctx.drawImage(fallback, 0, 0, 370, 320);
+      pushUndo();
+    };
+    fallback.src = `/api/stamp/${state.sessionId}/${state.editingFilename}?t=${Date.now()}`;
+  };
   img.src = `/api/stamp/${state.sessionId}/${baseName}?t=${Date.now()}`;
 
   // ツールをリセット

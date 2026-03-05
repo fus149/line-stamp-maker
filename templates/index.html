@@ -228,73 +228,6 @@
             </div>
           </div>
 
-          <!-- スタンプエディター -->
-          <div id="editor" hidden>
-            <div class="editor-header">
-              <button class="btn btn-ghost btn-sm" id="editor-back">← 一覧に戻る</button>
-              <span class="editor-title" id="editor-title">01.png を編集中</span>
-              <div class="editor-nav">
-                <button class="btn btn-ghost btn-sm" id="editor-prev">◀ 前</button>
-                <button class="btn btn-ghost btn-sm" id="editor-next">次 ▶</button>
-              </div>
-            </div>
-
-            <!-- ツール切り替え -->
-            <div class="editor-tools">
-              <button class="editor-tool-btn active" data-tool="eraser">
-                <span class="tool-icon">🧹</span>
-                <span class="tool-label">消しゴム</span>
-              </button>
-              <button class="editor-tool-btn" data-tool="move">
-                <span class="tool-icon">✋</span>
-                <span class="tool-label">移動・拡大</span>
-              </button>
-              <button class="editor-tool-btn" data-tool="text">
-                <span class="tool-icon">✏️</span>
-                <span class="tool-label">テキスト</span>
-              </button>
-            </div>
-
-            <!-- 消しゴム用コントロール -->
-            <div class="editor-controls" id="eraser-controls">
-              <label class="control-label">
-                ブラシサイズ: <span id="brush-size-val">20</span>px
-              </label>
-              <input type="range" id="brush-size" min="5" max="80" value="20" class="range-input" />
-              <button class="btn btn-ghost btn-sm" id="btn-undo">↩ 元に戻す</button>
-            </div>
-
-            <!-- 移動・拡大用コントロール -->
-            <div class="editor-controls" id="move-controls" hidden>
-              <label class="control-label">
-                拡大率: <span id="zoom-val">100</span>%
-              </label>
-              <input type="range" id="zoom-slider" min="50" max="200" value="100" class="range-input" />
-              <button class="btn btn-ghost btn-sm" id="btn-reset-pos">位置リセット</button>
-            </div>
-
-            <!-- テキスト変更用コントロール -->
-            <div class="editor-controls" id="text-controls" hidden>
-              <input type="text" id="editor-text-input" class="msg-input" maxlength="20" placeholder="メッセージを入力" />
-              <div class="text-pos-btns">
-                <button class="btn btn-ghost btn-sm text-pos-btn active" data-pos="bottom">下に配置</button>
-                <button class="btn btn-ghost btn-sm text-pos-btn" data-pos="top">上に配置</button>
-                <button class="btn btn-ghost btn-sm text-pos-btn" data-pos="none">文字なし</button>
-              </div>
-            </div>
-
-            <!-- Canvas表示エリア -->
-            <div class="editor-canvas-wrap" id="editor-canvas-wrap">
-              <canvas id="editor-canvas" width="370" height="320"></canvas>
-            </div>
-
-            <!-- アクション -->
-            <div class="actions">
-              <button class="btn btn-ghost" id="editor-cancel">キャンセル</button>
-              <button class="btn btn-primary" id="editor-save">保存する ✓</button>
-            </div>
-          </div>
-
           <!-- デバッグスクリーンショット -->
           <div id="debug-screenshots" hidden style="margin-top: 1rem;">
             <h3 class="detail-title">デバッグスクリーンショット</h3>
@@ -312,6 +245,73 @@
           <p class="error-message" id="error-message"></p>
           <div class="actions">
             <button class="btn btn-ghost" id="btn-retry">やり直す</button>
+          </div>
+        </div>
+
+        <!-- スタンプエディター（#resultと同階層に配置） -->
+        <div id="editor" hidden>
+          <div class="editor-header">
+            <button class="btn btn-ghost btn-sm" id="editor-back">← 一覧に戻る</button>
+            <span class="editor-title" id="editor-title">01.png を編集中</span>
+            <div class="editor-nav">
+              <button class="btn btn-ghost btn-sm" id="editor-prev">◀ 前</button>
+              <button class="btn btn-ghost btn-sm" id="editor-next">次 ▶</button>
+            </div>
+          </div>
+
+          <!-- ツール切り替え -->
+          <div class="editor-tools">
+            <button class="editor-tool-btn active" data-tool="eraser">
+              <span class="tool-icon">🧹</span>
+              <span class="tool-label">消しゴム</span>
+            </button>
+            <button class="editor-tool-btn" data-tool="move">
+              <span class="tool-icon">✋</span>
+              <span class="tool-label">移動・拡大</span>
+            </button>
+            <button class="editor-tool-btn" data-tool="text">
+              <span class="tool-icon">✏️</span>
+              <span class="tool-label">テキスト</span>
+            </button>
+          </div>
+
+          <!-- 消しゴム用コントロール -->
+          <div class="editor-controls" id="eraser-controls">
+            <label class="control-label">
+              ブラシサイズ: <span id="brush-size-val">20</span>px
+            </label>
+            <input type="range" id="brush-size" min="5" max="80" value="20" class="range-input" />
+            <button class="btn btn-ghost btn-sm" id="btn-undo">↩ 元に戻す</button>
+          </div>
+
+          <!-- 移動・拡大用コントロール -->
+          <div class="editor-controls" id="move-controls" hidden>
+            <label class="control-label">
+              拡大率: <span id="zoom-val">100</span>%
+            </label>
+            <input type="range" id="zoom-slider" min="50" max="200" value="100" class="range-input" />
+            <button class="btn btn-ghost btn-sm" id="btn-reset-pos">位置リセット</button>
+          </div>
+
+          <!-- テキスト変更用コントロール -->
+          <div class="editor-controls" id="text-controls" hidden>
+            <input type="text" id="editor-text-input" class="msg-input" maxlength="20" placeholder="メッセージを入力" />
+            <div class="text-pos-btns">
+              <button class="btn btn-ghost btn-sm text-pos-btn active" data-pos="bottom">下に配置</button>
+              <button class="btn btn-ghost btn-sm text-pos-btn" data-pos="top">上に配置</button>
+              <button class="btn btn-ghost btn-sm text-pos-btn" data-pos="none">文字なし</button>
+            </div>
+          </div>
+
+          <!-- Canvas表示エリア -->
+          <div class="editor-canvas-wrap" id="editor-canvas-wrap">
+            <canvas id="editor-canvas" width="370" height="320"></canvas>
+          </div>
+
+          <!-- アクション -->
+          <div class="actions">
+            <button class="btn btn-ghost" id="editor-cancel">キャンセル</button>
+            <button class="btn btn-primary" id="editor-save">保存する ✓</button>
           </div>
         </div>
       </section>
