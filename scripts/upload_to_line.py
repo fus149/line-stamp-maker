@@ -3,6 +3,9 @@ LINE Creators Market 自動アップロードスクリプト
 
 Playwrightでブラウザを開き、ログイン→スタンプ作成→画像アップロードまで自動化。
 ログインはユーザーが手動で行い、その後の操作をすべて自動化する。
+
+永続的なブラウザプロファイルを使用するため、一度ログインすれば次回以降は
+セッションが保持される。
 """
 
 from __future__ import annotations
@@ -13,7 +16,7 @@ import time
 from pathlib import Path
 from typing import Optional
 
-from playwright.sync_api import sync_playwright, Page, TimeoutError as PwTimeout
+from playwright.sync_api import sync_playwright, Page, BrowserContext, TimeoutError as PwTimeout
 
 
 # LINE OAuth ログインエントリーポイント
@@ -59,7 +62,6 @@ class UploadStatus:
             self.update("デバッグ", f"[{label}] URL={url}")
             self.update("デバッグ", f"[{label}] Title={title}")
 
-            # リンクとボタンを全て記録
             elements = []
             for el in page.locator("a[href], button").all()[:40]:
                 try:
@@ -80,6 +82,10 @@ class UploadStatus:
             self.update("デバッグ", f"[{label}] ページ情報取得失敗: {e}")
 
 
+# ============================================================
+# ページ状態判定ヘルパー
+# ============================================================
+
 def _wait_for_page_ready(page: Page, timeout: int = 10):
     """ページの読み込み完了を待つ。"""
     try:
@@ -90,7 +96,7 @@ def _wait_for_page_ready(page: Page, timeout: int = 10):
         page.wait_for_load_state("domcontentloaded", timeout=5000)
     except PwTimeout:
         pass
-    time.sleep(2)
+    time.sleep(1)
 
 
 def _is_on_dashboard(page: Page) -> bool:
@@ -98,136 +104,123 @@ def _is_on_dashboard(page: Page) -> bool:
     return "/my/" in page.url
 
 
-def _is_logged_in_by_elements(page: Page) -> bool:
-    """ページ上の要素でログイン済みか判定する（URLに依存しない）。"""
-    selectors = [
-        # ダッシュボード上のナビ要素
-        "a:has-text('アイテム管理')",
-        "a:has-text('新規登録')",
-        "a:has-text('アカウント設定')",
-        "a:has-text('ログアウト')",
-        "a:has-text('Log Out')",
-        "a[href*='/my/']",
-        # トップページ上のナビ要素（ログイン済み時のみ表示）
-        "a:has-text('マイページ')",
-        "a:has-text('My Page')",
-    ]
-    for sel in selectors:
-        try:
-            if page.locator(sel).first.is_visible(timeout=500):
-                return True
-        except Exception:
-            continue
-    return False
+def _is_on_login_page(url: str) -> bool:
+    """LINEログインページにいるか判定。"""
+    return "access.line.me" in url
 
 
-def _is_on_creator_top_page(url: str) -> bool:
-    """creator.line.meのトップページにいるか判定。"""
-    if "creator.line.me" not in url:
+def _is_on_creator_site(url: str) -> bool:
+    """creator.line.me（ログインページ以外）にいるか判定。"""
+    return "creator.line.me" in url and "access.line.me" not in url
+
+
+def _try_navigate_to_dashboard(page: Page, status: UploadStatus) -> bool:
+    """/signup/line_auth に遷移し、ログイン済みならダッシュボードにリダイレクトされるか確認。
+    ダッシュボードに到達できたらTrue。"""
+    try:
+        page.goto(LOGIN_URL, timeout=15000)
+        _wait_for_page_ready(page)
+        new_url = page.url
+        status.update("ログイン", f"リダイレクト先: {new_url[:100]}", 15)
+        return "/my/" in new_url
+    except Exception as e:
+        status.update("デバッグ", f"リダイレクト試行失敗: {e}")
         return False
-    if "access.line.me" in url:
-        return False
-    if "/my/" in url:
-        return False
-    if "/signup/" in url:
-        return False
-    return True
 
 
-def _find_logged_in_page(context, status: UploadStatus) -> Optional[Page]:
-    """コンテキスト内の全ページをスキャンし、ログイン済みのページを探す。
+# ============================================================
+# ログイン検出
+# ============================================================
 
-    OAuth ログイン後、元のページにリダイレクトされる場合もあれば、
-    新しいタブやポップアップが開く場合もある。全ページを確認する。
+def _find_dashboard_page(context: BrowserContext, status: UploadStatus) -> Optional[Page]:
+    """コンテキスト内の全ページから、ダッシュボードにいるページを探す。
+    見つからない場合、creator.line.meにいるページから /signup/line_auth でリダイレクトを試みる。
     """
     all_pages = context.pages
-    if len(all_pages) > 1:
-        status.update("デバッグ", f"コンテキスト内のページ数: {len(all_pages)}")
+    creator_page = None
 
     for p in all_pages:
         try:
             url = p.url
-            # ダッシュボードにいるページを発見
+            # ダッシュボードに直接いるページ
             if "/my/" in url:
-                status.update("ログイン", f"ダッシュボードページ発見: {url[:100]}", 20)
+                status.update("ログイン", f"ダッシュボード検出: {url[:100]}", 20)
                 return p
-
-            # creator.line.me にいる（ログインページではない）
-            if "creator.line.me" in url and "access.line.me" not in url:
-                _wait_for_page_ready(p)
-                if _is_logged_in_by_elements(p):
-                    status.update("ログイン", f"ログイン済みページ発見: {url[:100]}", 20)
-                    return p
-
-                # トップページにいる場合、/signup/line_auth に再遷移してダッシュボードリダイレクトを試みる
-                if _is_on_creator_top_page(url):
-                    status.update("ログイン", f"トップページ検出。ダッシュボードへリダイレクト試行...", 15)
-                    try:
-                        p.goto(LOGIN_URL, timeout=15000)
-                        _wait_for_page_ready(p)
-                        new_url = p.url
-                        status.update("ログイン", f"リダイレクト先: {new_url[:100]}", 15)
-                        if "/my/" in new_url:
-                            return p
-                        # まだログインページに飛ばされた → 未ログイン
-                        if "access.line.me" in new_url:
-                            status.update("ログイン", "未ログイン状態。ログインページに戻りました。", 10)
-                            continue
-                        # creator.line.me のどこかにいる
-                        if _is_logged_in_by_elements(p):
-                            return p
-                    except Exception as e:
-                        status.update("デバッグ", f"リダイレクト試行失敗: {e}")
-
+            # creator.line.me にいるページ（ログインページ以外）を記録
+            if _is_on_creator_site(url) and "/signup/" not in url:
+                creator_page = p
             # OAuth コールバック中のページ
             if "/signup/line_callback" in url:
-                status.update("ログイン", f"OAuth コールバック中のページ発見: {url[:80]}", 15)
-                # コールバック完了を少し待つ
+                status.update("ログイン", f"OAuthコールバック検出", 15)
                 try:
-                    p.wait_for_url(lambda u: "/my/" in u or ("creator.line.me" in u and "access.line.me" not in u and "/signup/" not in u), timeout=15000)
-                    return p
+                    p.wait_for_url(lambda u: "/my/" in u or (_is_on_creator_site(u) and "/signup/" not in u), timeout=15000)
+                    if "/my/" in p.url:
+                        return p
+                    creator_page = p
                 except PwTimeout:
                     pass
         except Exception:
             continue
+
+    # creator.line.me にいるがダッシュボードではないページがある場合、リダイレクト試行
+    if creator_page:
+        status.update("ログイン", "creator.line.me検出。ダッシュボードへリダイレクト試行...", 15)
+        if _try_navigate_to_dashboard(creator_page, status):
+            return creator_page
+        # リダイレクト失敗 → access.line.me に戻された場合はまだ未ログイン
+        if _is_on_login_page(creator_page.url):
+            return None
+
     return None
 
 
 def wait_for_login(page: Page, status: UploadStatus, timeout: int = 300) -> Optional[Page]:
-    """ユーザーがログインするまで待機。ログイン後のページを返す（新しいタブの場合もある）。
-    失敗時はNoneを返す。"""
-    status.update("ログイン", "Playwrightブラウザが開きます。そのブラウザでLINEにログインしてください。", 5)
-
+    """ユーザーがログインするまで待機。ログイン後のページを返す。失敗時はNone。"""
     context = page.context
 
-    # 新しいページ（ポップアップ・タブ）が開いたら記録する
-    new_pages: list[Page] = []
+    # 新しいタブ/ポップアップを検知
+    context.on("page", lambda new_page: status.update(
+        "デバッグ", f"新しいタブ検出: {(new_page.url or '(loading)')[:80]}"
+    ))
 
-    def on_new_page(new_page: Page):
-        url = new_page.url or "(loading)"
-        status.update("デバッグ", f"新しいタブ/ポップアップ検出: {url[:100]}")
-        new_pages.append(new_page)
-
-    context.on("page", on_new_page)
-
-    # LINE OAuth ログインページに直接アクセス
+    # LINE OAuth ログインページにアクセス
+    status.update("ログイン", "LINE Creators Marketにアクセス中...", 5)
     page.goto(LOGIN_URL, timeout=30000)
     _wait_for_page_ready(page)
+    page.bring_to_front()
 
     status.save_screenshot(page, "01_login_page")
 
-    # 既にログイン済みか確認（リダイレクトでダッシュボードに飛んだ場合）
+    # 既にダッシュボードにリダイレクトされた（セッション有効）
     if _is_on_dashboard(page):
-        status.update("ログイン", "既にログイン済みです。", 15)
+        status.update("ログイン", "ログイン済み（セッション有効）", 20)
         return page
 
-    # creator.line.me のトップにリダイレクトされた場合
-    if "creator.line.me" in page.url and "access.line.me" not in page.url:
-        if _is_logged_in_by_elements(page):
-            status.update("ログイン", "既にログイン済みです。", 15)
+    # creator.line.me にいる場合（トップページ等）→ リダイレクトでダッシュボードに行けるか試す
+    if _is_on_creator_site(page.url) and "/signup/" not in page.url:
+        if _try_navigate_to_dashboard(page, status):
+            status.update("ログイン", "ログイン済み（ダッシュボードにリダイレクト成功）", 20)
             return page
 
-    status.update("ログイン", f"⚠️ 新しく開いたブラウザウィンドウ（Chromium）でログインしてください（{timeout}秒以内）", 10)
+    # ログインページにいる → ユーザーにログインを促す
+    # ブラウザウィンドウにバナーを表示して目立たせる
+    try:
+        page.evaluate("""
+            (() => {
+                const banner = document.createElement('div');
+                banner.id = 'pw-login-banner';
+                banner.style.cssText = 'position:fixed;top:0;left:0;right:0;z-index:99999;' +
+                    'background:#e74c3c;color:white;padding:16px;text-align:center;' +
+                    'font-size:18px;font-weight:bold;box-shadow:0 2px 10px rgba(0,0,0,0.3);';
+                banner.textContent = '⚠️ このブラウザでLINEにログインしてください ⚠️';
+                document.body.prepend(banner);
+            })()
+        """)
+    except Exception:
+        pass
+
+    page.bring_to_front()
+    status.update("ログイン", f"⚠️ 新しく開いたブラウザウィンドウでログインしてください（{timeout}秒以内）", 10)
 
     last_urls: dict[int, str] = {}
     elapsed = 0
@@ -236,63 +229,51 @@ def wait_for_login(page: Page, status: UploadStatus, timeout: int = 300) -> Opti
         time.sleep(interval)
         elapsed += interval
 
-        # 全ページの URL を確認（新しいタブやポップアップも含む）
+        # 全ページのURL変化を監視
         for p in context.pages:
             try:
                 pid = id(p)
                 current_url = p.url
                 prev_url = last_urls.get(pid, "")
-
                 if current_url != prev_url:
-                    status.update("ログイン", f"URL変化 (page {pid % 1000}): {current_url[:100]}", 10)
+                    status.update("ログイン", f"URL変化: {current_url[:100]}", 10)
                     last_urls[pid] = current_url
             except Exception:
                 continue
 
-        # 全ページからログイン済みのものを探す
-        logged_in_page = _find_logged_in_page(context, status)
-        if logged_in_page:
-            _wait_for_page_ready(logged_in_page)
+        # ダッシュボードに到達したページがあるか確認
+        dashboard_page = _find_dashboard_page(context, status)
+        if dashboard_page:
+            _wait_for_page_ready(dashboard_page)
             status.update("ログイン", "ログイン完了！", 20)
-            status.save_screenshot(logged_in_page, "02_login_done")
-
-            # ダッシュボードにいない場合、/signup/line_auth に再遷移してダッシュボードリダイレクトを試行
-            if "/my/" not in logged_in_page.url:
-                status.update("ログイン", "ダッシュボードへ移動中...", 20)
-                try:
-                    logged_in_page.goto(LOGIN_URL, timeout=15000)
-                    _wait_for_page_ready(logged_in_page)
-                    status.update("ログイン", f"リダイレクト先: {logged_in_page.url[:100]}", 20)
-                except Exception as e:
-                    status.update("デバッグ", f"ダッシュボード遷移失敗: {e}")
-            return logged_in_page
+            status.save_screenshot(dashboard_page, "02_login_done")
+            return dashboard_page
 
         # 30秒ごとにリマインド
         if elapsed % 30 == 0 and elapsed < timeout:
             remaining = timeout - elapsed
-            status.update("ログイン", f"⚠️ Chromiumブラウザでログインしてください（残り{remaining}秒）", 10)
+            status.update("ログイン", f"⚠️ ブラウザでログインしてください（残り{remaining}秒）", 10)
+            # ブラウザを前面に持ってくる
+            try:
+                page.bring_to_front()
+            except Exception:
+                pass
 
-    # タイムアウト - 最終状態をログに記録
-    status.update("エラー", f"タイムアウト: ログインが完了しませんでした。")
+    # タイムアウト
+    status.update("エラー", "タイムアウト: ログインが完了しませんでした。")
     status.update("デバッグ", f"最終ページ数: {len(context.pages)}")
     for i, p in enumerate(context.pages):
         try:
             status.update("デバッグ", f"  Page[{i}] URL: {p.url[:100]}")
         except Exception:
-            status.update("デバッグ", f"  Page[{i}] (closed)")
+            pass
     status.save_screenshot(page, "02_login_timeout")
     return None
 
 
-def _extract_user_path(page: Page) -> Optional[str]:
-    """ダッシュボードURLからユーザーパスを抽出する。
-    例: /my/dSCMSb2IRvLYU4oe/sticker/ → /my/dSCMSb2IRvLYU4oe
-    """
-    match = re.search(r"(/my/[^/]+)", page.url)
-    if match:
-        return match.group(1)
-    return None
-
+# ============================================================
+# ダッシュボード操作
+# ============================================================
 
 def _dismiss_modals(page: Page, status: UploadStatus):
     """ダッシュボード上のモーダルポップアップ（キャンペーン告知等）を閉じる。"""
@@ -316,38 +297,34 @@ def _dismiss_modals(page: Page, status: UploadStatus):
             continue
 
 
+def _extract_user_path(page: Page) -> Optional[str]:
+    """ダッシュボードURLからユーザーパスを抽出する。
+    例: /my/dSCMSb2IRvLYU4oe/sticker/ → /my/dSCMSb2IRvLYU4oe
+    """
+    match = re.search(r"(/my/[^/]+)", page.url)
+    if match:
+        return match.group(1)
+    return None
+
+
 def navigate_to_new_sticker(page: Page, status: UploadStatus) -> bool:
     """スタンプ新規作成ページに遷移する。"""
     status.update("ページ遷移", f"新規登録ページに移動中... 現在URL: {page.url[:100]}", 25)
 
-    # ダッシュボードにいない場合、マイページリンクをクリックして移動
+    # ダッシュボードにいない場合
     if not _is_on_dashboard(page):
         status.update("ページ遷移", "ダッシュボードに移動中...", 25)
-        try:
-            mypage_link = page.locator("a[href*='/my/'], a:has-text('マイページ')").first
-            if mypage_link.is_visible(timeout=3000):
-                mypage_link.click()
-                time.sleep(3)
-                _wait_for_page_ready(page)
-        except Exception:
-            pass
+        if not _try_navigate_to_dashboard(page, status):
+            status.update("エラー", f"ダッシュボードに到達できませんでした。URL: {page.url[:100]}")
+            status.save_screenshot(page, "03_dashboard_fail")
+            return False
 
-        # それでもダッシュボードにいない場合、ログインし直す
-        if not _is_on_dashboard(page):
-            status.update("ページ遷移", "ログインページからやり直します...", 25)
-            page.goto(LOGIN_URL, timeout=30000)
-            _wait_for_page_ready(page)
-            try:
-                page.wait_for_url("**/my/**", timeout=120000)
-                _wait_for_page_ready(page)
-            except PwTimeout:
-                status.update("エラー", f"ダッシュボードに到達できませんでした。URL: {page.url[:100]}")
-                status.save_screenshot(page, "03_dashboard_fail")
-                return False
+    # モーダルを閉じる（ここでも再度試行）
+    _dismiss_modals(page, status)
 
-    # ページ完全読み込みを待つ（サイドバーのレンダリング完了まで）
+    # ページ完全読み込みを待つ
     _wait_for_page_ready(page)
-    time.sleep(3)
+    time.sleep(2)
 
     status.save_screenshot(page, "03_dashboard")
     status.dump_page_info(page, "ダッシュボード")
@@ -356,9 +333,7 @@ def navigate_to_new_sticker(page: Page, status: UploadStatus) -> bool:
     status.update("ページ遷移", "「新規登録」ボタンを探しています...", 27)
 
     new_reg_clicked = False
-    new_reg_href = None
 
-    # まずhrefを取得してから判断する
     try:
         links = page.locator("a").all()
         for link in links:
@@ -366,7 +341,6 @@ def navigate_to_new_sticker(page: Page, status: UploadStatus) -> bool:
                 text = (link.text_content() or "").strip()
                 href = link.get_attribute("href") or ""
                 if "新規登録" in text and link.is_visible():
-                    new_reg_href = href
                     status.update("ページ遷移", f"「新規登録」発見: text=\"{text}\" href=\"{href}\"", 28)
                     link.click()
                     time.sleep(3)
@@ -391,7 +365,6 @@ def navigate_to_new_sticker(page: Page, status: UploadStatus) -> bool:
                 status.update("ページ遷移", f"URL直接遷移を試行: {url}", 28)
                 page.goto(url, timeout=15000)
                 _wait_for_page_ready(page)
-                # 404やエラーページでないか確認
                 page_text = page.text_content("body") or ""
                 if "存在しません" not in page_text and "404" not in page.title():
                     form_count = page.locator("input, textarea, select").count()
@@ -411,14 +384,12 @@ def navigate_to_new_sticker(page: Page, status: UploadStatus) -> bool:
     status.dump_page_info(page, "新規登録後")
 
     # ---- スタンプタイプ選択 ----
-    # 「スタンプ」を選ぶ必要がある場合（スタンプ/絵文字/着せかえ選択画面）
     time.sleep(2)
     try:
         sticker_link = page.locator("a").filter(has_text="スタンプ").first
         if sticker_link.is_visible(timeout=3000):
             href = sticker_link.get_attribute("href") or ""
             text = (sticker_link.text_content() or "").strip()
-            # 「スタンプ」タブ（既に選択済み）でなく、遷移リンクの場合のみクリック
             if href and "sticker" in href.lower():
                 status.update("ページ遷移", f"「{text}」を選択 (href={href})", 32)
                 sticker_link.click()
@@ -431,19 +402,21 @@ def navigate_to_new_sticker(page: Page, status: UploadStatus) -> bool:
     current_url = page.url
     status.update("ページ遷移", f"最終URL: {current_url}", 35)
 
-    # フォーム要素があれば成功
     form_count = page.locator("input[type='text'], textarea, input[type='file'], select").count()
     if form_count > 0:
         status.update("ページ遷移", f"スタンプ作成ページに到着（フォーム要素: {form_count}個）", 35)
         status.save_screenshot(page, "05_form_found")
         return True
 
-    # フォームがなくても、ページにコンテンツがあれば進む（SPAの場合）
     status.save_screenshot(page, "05_no_form")
     status.dump_page_info(page, "フォーム未検出")
     status.update("ページ遷移", "フォームが見つかりません。デバッグ情報を記録しました。", 30)
     return False
 
+
+# ============================================================
+# フォーム入力・画像アップロード
+# ============================================================
 
 def fill_sticker_info(page: Page, title: str, description: str, status: UploadStatus):
     """スタンプのタイトル・説明文を入力する。"""
@@ -483,7 +456,6 @@ def fill_sticker_info(page: Page, title: str, description: str, status: UploadSt
                 break
 
         if not title_filled and count > 0:
-            # 最初の visible input に入力
             for i in range(count):
                 if inputs.nth(i).is_visible():
                     inputs.nth(i).fill(title)
@@ -556,7 +528,6 @@ def upload_images(page: Page, output_dir: Path, status: UploadStatus):
                 status.update("画像アップ", f"[{i}/{total}] {stamp_file.name} OK", progress)
                 time.sleep(3)
             else:
-                # file inputがない場合、アップロードボタンを探す
                 upload_btns = page.locator(
                     "button:has-text('アップロード'), "
                     "button:has-text('Upload'), "
@@ -582,6 +553,10 @@ def upload_images(page: Page, output_dir: Path, status: UploadStatus):
     status.update("画像アップ", "画像アップロード完了！", 95)
 
 
+# ============================================================
+# メインフロー
+# ============================================================
+
 def upload_to_line(
     output_dir: Path,
     title: str = "ペットスタンプ",
@@ -593,7 +568,6 @@ def upload_to_line(
     output_dir = Path(output_dir)
     stamp_files = sorted(output_dir.glob("[0-9][0-9].png"))
 
-    # デバッグ用ディレクトリ
     debug_dir = output_dir / "debug"
     status = UploadStatus(status_file, debug_dir)
 
@@ -603,7 +577,7 @@ def upload_to_line(
 
     status.update("開始", f"スタンプ {len(stamp_files)}枚 / タイトル: {title}", 0)
 
-    # 永続的なブラウザプロファイルを使用（ログインセッションが保存される）
+    # 永続的なブラウザプロファイル（ログインセッション保存）
     project_root = Path(__file__).resolve().parent.parent
     user_data_dir = project_root / ".browser_data"
     user_data_dir.mkdir(exist_ok=True)
@@ -616,17 +590,26 @@ def upload_to_line(
             no_viewport=True,
             args=["--start-maximized"],
         )
+
+        # persistent context はデフォルトで空ページを1つ作る。
+        # 不要な空ページを閉じてから新しいページを作る。
+        for existing_page in context.pages:
+            if existing_page.url in ("about:blank", "chrome://newtab/"):
+                try:
+                    existing_page.close()
+                except Exception:
+                    pass
+
         page = context.new_page()
 
         try:
-            # Step 1: ログイン（ログイン後のページが返る。新しいタブの場合もある）
+            # Step 1: ログイン
             logged_in_page = wait_for_login(page, status)
             if logged_in_page is None:
                 return False
-            # ログイン後のページを使う（元のpageとは異なる場合がある）
             page = logged_in_page
 
-            # Step 2: モーダルポップアップがあれば閉じる
+            # Step 2: モーダルを閉じる
             _dismiss_modals(page, status)
 
             # Step 3: スタンプ作成ページへ遷移
@@ -646,10 +629,10 @@ def upload_to_line(
                         status.dump_page_info(page, "最終状態")
                         return False
 
-            # Step 3: スタンプ情報入力
+            # Step 4: スタンプ情報入力
             fill_sticker_info(page, title, description, status)
 
-            # Step 4: 画像アップロード
+            # Step 5: 画像アップロード
             upload_images(page, output_dir, status)
 
             status.update("完了", "自動登録完了！ブラウザで内容を確認してください。", 100)
