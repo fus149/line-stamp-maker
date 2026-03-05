@@ -98,6 +98,25 @@ def _is_on_dashboard(page: Page) -> bool:
     return "/my/" in page.url
 
 
+def _is_logged_in_by_elements(page: Page) -> bool:
+    """ページ上の要素でログイン済みか判定する（URLに依存しない）。"""
+    selectors = [
+        "a:has-text('アイテム管理')",
+        "a:has-text('新規登録')",
+        "a:has-text('アカウント設定')",
+        "a:has-text('ログアウト')",
+        "a:has-text('Log Out')",
+        "a[href*='/my/']",
+    ]
+    for sel in selectors:
+        try:
+            if page.locator(sel).first.is_visible(timeout=500):
+                return True
+        except Exception:
+            continue
+    return False
+
+
 def wait_for_login(page: Page, status: UploadStatus, timeout: int = 300) -> bool:
     """ユーザーがログインするまで待機。"""
     status.update("ログイン", "LINEアカウントでログインしてください。", 5)
@@ -115,7 +134,7 @@ def wait_for_login(page: Page, status: UploadStatus, timeout: int = 300) -> bool
 
     status.update("ログイン", f"ログイン待機中... ({timeout}秒以内にログインしてください)", 10)
 
-    # ポーリングでログイン完了を検出
+    last_url = ""
     elapsed = 0
     interval = 3
     while elapsed < timeout:
@@ -124,20 +143,45 @@ def wait_for_login(page: Page, status: UploadStatus, timeout: int = 300) -> bool
 
         current_url = page.url
 
-        # /my/ 配下にいる ＝ ダッシュボード到達
+        # URLが変わったらログに記録
+        if current_url != last_url:
+            status.update("ログイン", f"URL変化: {current_url[:100]}", 10)
+            last_url = current_url
+
+        # チェック1: /my/ 配下にいる ＝ ダッシュボード到達
         if "/my/" in current_url:
             _wait_for_page_ready(page)
-            status.update("ログイン", "ログイン完了！", 20)
+            status.update("ログイン", "ログイン完了！（ダッシュボードURL検出）", 20)
             status.save_screenshot(page, "02_login_done")
             return True
 
-        # OAuth コールバック中
+        # チェック2: OAuth コールバック中 → リダイレクト待ち
         if "/signup/line_callback" in current_url:
             status.update("ログイン", "認証処理中...", 15)
             time.sleep(5)
             continue
 
-    status.update("エラー", "タイムアウト: ログインが完了しませんでした。")
+        # チェック3: creator.line.me にいる場合（/ja/ トップ等にリダイレクトされた可能性）
+        # access.line.me（ログイン画面）以外の creator.line.me ならページ要素でログイン判定
+        if "creator.line.me" in current_url and "access.line.me" not in current_url:
+            _wait_for_page_ready(page)
+            if _is_logged_in_by_elements(page):
+                status.update("ログイン", "ログイン完了！（ページ要素で検出）", 20)
+                status.save_screenshot(page, "02_login_done")
+                # ダッシュボードにいない場合、ナビの「マイページ」リンクをクリックして移動
+                if "/my/" not in current_url:
+                    try:
+                        mypage_link = page.locator("a[href*='/my/'], a:has-text('マイページ')").first
+                        if mypage_link.is_visible(timeout=2000):
+                            mypage_link.click()
+                            time.sleep(3)
+                            _wait_for_page_ready(page)
+                            status.update("ログイン", f"マイページに遷移: {page.url[:100]}", 20)
+                    except Exception:
+                        pass
+                return True
+
+    status.update("エラー", f"タイムアウト: ログインが完了しませんでした。最終URL: {page.url[:100]}")
     status.save_screenshot(page, "02_login_timeout")
     return False
 
@@ -154,19 +198,36 @@ def _extract_user_path(page: Page) -> Optional[str]:
 
 def navigate_to_new_sticker(page: Page, status: UploadStatus) -> bool:
     """スタンプ新規作成ページに遷移する。"""
-    status.update("ページ遷移", "新規登録ページに移動中...", 25)
+    status.update("ページ遷移", f"新規登録ページに移動中... 現在URL: {page.url[:100]}", 25)
 
-    # ダッシュボードにいることを確認
+    # ダッシュボードにいない場合、マイページリンクをクリックして移動
     if not _is_on_dashboard(page):
-        status.update("ページ遷移", "ダッシュボードにいません。ログインし直します。", 25)
-        page.goto(LOGIN_URL, timeout=30000)
-        _wait_for_page_ready(page)
+        status.update("ページ遷移", "ダッシュボードに移動中...", 25)
         try:
-            page.wait_for_url("**/my/**", timeout=120000)
+            mypage_link = page.locator("a[href*='/my/'], a:has-text('マイページ')").first
+            if mypage_link.is_visible(timeout=3000):
+                mypage_link.click()
+                time.sleep(3)
+                _wait_for_page_ready(page)
+        except Exception:
+            pass
+
+        # それでもダッシュボードにいない場合、ログインし直す
+        if not _is_on_dashboard(page):
+            status.update("ページ遷移", "ログインページからやり直します...", 25)
+            page.goto(LOGIN_URL, timeout=30000)
             _wait_for_page_ready(page)
-        except PwTimeout:
-            status.update("エラー", "ダッシュボードに到達できませんでした。")
-            return False
+            try:
+                page.wait_for_url("**/my/**", timeout=120000)
+                _wait_for_page_ready(page)
+            except PwTimeout:
+                status.update("エラー", f"ダッシュボードに到達できませんでした。URL: {page.url[:100]}")
+                status.save_screenshot(page, "03_dashboard_fail")
+                return False
+
+    # ページ完全読み込みを待つ（サイドバーのレンダリング完了まで）
+    _wait_for_page_ready(page)
+    time.sleep(3)
 
     status.save_screenshot(page, "03_dashboard")
     status.dump_page_info(page, "ダッシュボード")

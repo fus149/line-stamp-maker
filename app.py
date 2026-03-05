@@ -179,12 +179,20 @@ async def upload_to_line_api(
     import threading
     from scripts.upload_to_line import upload_to_line
 
-    thread = threading.Thread(
-        target=upload_to_line,
-        args=(output_dir, title, description),
-        kwargs={"interactive": False, "status_file": status_file},
-        daemon=True,
-    )
+    def _run_upload():
+        try:
+            upload_to_line(output_dir, title, description, interactive=False, status_file=status_file)
+        except Exception as e:
+            # スレッド内の未捕捉エラーをステータスファイルに記録
+            error_data = {
+                "step": "エラー",
+                "message": f"スレッド内エラー: {e}",
+                "progress": 0,
+                "logs": [f"[エラー] スレッド内エラー: {e}"],
+            }
+            status_file.write_text(json.dumps(error_data, ensure_ascii=False), encoding="utf-8")
+
+    thread = threading.Thread(target=_run_upload, daemon=True)
     thread.start()
 
     return {
