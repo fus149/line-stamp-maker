@@ -336,16 +336,17 @@ function showResult(data) {
     div.className = "result-item";
     div.dataset.index = i;
     div.dataset.filename = filename;
+    div.style.cursor = "pointer";
+    div.addEventListener("click", () => openEditor(i));
 
     const img = document.createElement("img");
     img.src = `/api/stamp/${state.sessionId}/${filename}`;
     img.alt = filename;
     img.loading = "lazy";
 
-    const badge = document.createElement("button");
+    const badge = document.createElement("span");
     badge.className = "edit-badge";
     badge.textContent = "編集";
-    badge.addEventListener("click", () => openEditor(i));
 
     div.append(img, badge);
     grid.appendChild(div);

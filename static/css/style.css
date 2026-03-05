@@ -716,19 +716,20 @@ a:hover { text-decoration: underline; }
   right: 6px;
   padding: 3px 10px;
   border-radius: 99px;
-  background: rgba(0, 0, 0, 0.6);
+  background: rgba(0, 0, 0, 0.55);
   color: #fff;
   font-size: 0.7rem;
   font-weight: 700;
   border: none;
-  cursor: pointer;
-  opacity: 0;
+  pointer-events: none;
+  opacity: 0.8;
   transition: var(--transition);
   font-family: inherit;
 }
 
 .result-item:hover .edit-badge {
   opacity: 1;
+  background: rgba(0, 0, 0, 0.75);
 }
 
 .btn-sm {
