@@ -441,20 +441,34 @@ def _force_dismiss_qr_modal(page: Page, status: UploadStatus):
     証拠(session b45b0b87): QRモーダルが画像アップロードのクリックをブロック:
     - <div role="dialog" class="MdPOP01Modal ... FnOaQrcode"> intercepts pointer events
     - 毎回の画像アップロード試行で30秒タイムアウト
+    証拠(session b45b0b87-2回目): JS削除してもVue再レンダリングで復活
+    → CSSで永続的に非表示にする
     """
     try:
         removed = page.evaluate("""
             (() => {
-                // QRコードモーダルを検索して削除
+                // CSS注入: QRモーダルを永続的に非表示（Vue再レンダリング対策）
+                if (!document.getElementById('__dismiss_qr_style')) {
+                    const style = document.createElement('style');
+                    style.id = '__dismiss_qr_style';
+                    style.textContent = `
+                        .FnOaQrcode, .MdPop24OAQRcode,
+                        .FnOaQrcode .ExBackdrop,
+                        [role="dialog"].FnOaQrcode {
+                            display: none !important;
+                            pointer-events: none !important;
+                        }
+                    `;
+                    document.head.appendChild(style);
+                }
+                // 既存のモーダルも削除
                 const modals = document.querySelectorAll('.FnOaQrcode, .MdPop24OAQRcode');
                 let removed = 0;
                 for (const modal of modals) {
-                    // モーダル自身またはその親ダイアログを削除
                     const dialog = modal.closest('[role="dialog"]') || modal;
                     dialog.remove();
                     removed++;
                 }
-                // バックドロップも削除
                 const backdrops = document.querySelectorAll('.ExBackdrop');
                 for (const bd of backdrops) {
                     bd.remove();
@@ -464,8 +478,10 @@ def _force_dismiss_qr_modal(page: Page, status: UploadStatus):
             })()
         """)
         if removed and removed > 0:
-            status.update("デバッグ", f"QRモーダル強制削除: {removed}要素")
-            time.sleep(0.5)
+            status.update("デバッグ", f"QRモーダル強制削除+CSS非表示: {removed}要素")
+        else:
+            status.update("デバッグ", "QRモーダルCSS非表示設定済み")
+        time.sleep(0.5)
     except Exception as e:
         status.update("デバッグ", f"QRモーダル強制削除失敗: {e}")
 
@@ -1144,6 +1160,49 @@ def upload_images(page: Page, output_dir: Path, status: UploadStatus):
             _force_dismiss_qr_modal(page, status)
     except Exception as e:
         status.update("デバッグ", f"スタンプ画像タブ遷移失敗: {e}")
+
+    # 「編集」ボタンをクリックして編集モードに入る
+    # 証拠(session b45b0b87-2回目): スタンプ画像タブは閲覧モードでfile input=0
+    # 「編集」ボタンを押さないとアップロードUIが出ない
+    try:
+        edit_clicked = False
+        for edit_text in ["編集", "Edit"]:
+            try:
+                edit_btn = page.get_by_text(edit_text, exact=True)
+                count = edit_btn.count()
+                for idx in range(count):
+                    btn = edit_btn.nth(idx)
+                    try:
+                        if btn.is_visible(timeout=2000):
+                            # ボタンまたはリンクであることを確認
+                            tag = btn.evaluate("e => e.tagName")
+                            if tag in ["BUTTON", "A", "SPAN", "DIV"]:
+                                btn.click()
+                                edit_clicked = True
+                                status.update("画像アップ", f"「{edit_text}」ボタンをクリック (tag={tag})")
+                                time.sleep(3)
+                                # 編集モード遷移後にモーダル対策
+                                _force_dismiss_qr_modal(page, status)
+                                break
+                    except Exception:
+                        continue
+                if edit_clicked:
+                    break
+            except Exception:
+                continue
+        if not edit_clicked:
+            # URLに#/editを付与して試行
+            try:
+                current_url = page.url
+                base_url = current_url.split("#")[0]
+                page.goto(f"{base_url}#/image/edit", timeout=15000)
+                status.update("画像アップ", "#/image/edit に直接遷移")
+                time.sleep(3)
+                _force_dismiss_qr_modal(page, status)
+            except Exception as e:
+                status.update("デバッグ", f"編集モード遷移失敗: {e}")
+    except Exception as e:
+        status.update("デバッグ", f"編集ボタンクリック失敗: {e}")
 
     # デバッグ: 現在のページ構造を記録
     status.save_screenshot(page, "09_upload_page")
