@@ -7,6 +7,8 @@ LINEスタンプ画像処理モジュール
 from __future__ import annotations
 
 import os
+import time
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from pathlib import Path
 from typing import List, Optional, Tuple
 
@@ -27,6 +29,14 @@ OUTLINE_WIDTH = 3
 # LINE Creators Market 必須画像サイズ
 MAIN_IMAGE_SIZE = (240, 240)  # メイン画像
 TAB_IMAGE_SIZE = (96, 74)     # タブ画像
+
+# 高速化: 入力画像の最大サイズ（長辺px）
+# IS-Netは1024x1024で推論するため、それ以上の入力は無駄に重い
+# alpha mattingも入力解像度で実行されるため、縮小で大幅に高速化
+MAX_INPUT_DIMENSION = 1500
+
+# 並列処理ワーカー数
+PARALLEL_WORKERS = 4
 
 # --- フォント候補（丸ゴシック優先） ---
 FONT_CANDIDATES = [
@@ -86,6 +96,22 @@ def correct_brightness(img: Image.Image, threshold: float = 85.0) -> Image.Image
         factor = min(threshold / max(mean_brightness, 1), 2.0)
         img = ImageEnhance.Brightness(img).enhance(factor)
     return img
+
+
+def _predownscale(img: Image.Image, max_dim: int = MAX_INPUT_DIMENSION) -> Image.Image:
+    """大きな画像をrembg処理前に縮小して高速化する。
+
+    IS-Netモデルは内部で1024x1024にリサイズするため、
+    それを大きく超える入力画像は事前に縮小しても品質への影響が少ない。
+    alpha mattingは入力解像度で実行されるため、縮小の効果が特に大きい。
+    """
+    w, h = img.size
+    if max(w, h) <= max_dim:
+        return img
+    ratio = max_dim / max(w, h)
+    new_w = int(w * ratio)
+    new_h = int(h * ratio)
+    return img.resize((new_w, new_h), Image.LANCZOS)
 
 
 # IS-Netモデルをモジュール読み込み時に一度だけ初期化
@@ -269,7 +295,13 @@ def process_single_image(
     # Step1: 向き補正
     img = correct_orientation(img)
 
-    # Step1: 明るさ補正
+    # Step1b: 大きな画像を事前縮小（背景除去の高速化）
+    original_size = img.size
+    img = _predownscale(img)
+    if img.size != original_size:
+        print(f"  プリダウンスケール: {original_size[0]}x{original_size[1]} → {img.size[0]}x{img.size[1]}")
+
+    # Step1c: 明るさ補正
     img_rgb = img.convert("RGB")
     img_rgb = correct_brightness(img_rgb)
     img = img_rgb.convert("RGBA")
@@ -340,12 +372,36 @@ def process_all_images(
     if len(messages) != 8:
         raise ValueError(f"メッセージは8個必要です（現在{len(messages)}個）。")
 
-    results = []
-    for i, (img_file, msg) in enumerate(zip(image_files, messages), start=1):
+    # セッションを事前初期化（並列処理前にモデルロードを完了）
+    print("モデルを初期化中...")
+    _get_bg_session()
+
+    # 並列処理で8枚を同時に処理
+    start_time = time.time()
+    results = [None] * 8
+
+    def _process_one(args):
+        i, img_file, msg = args
         output_path = output_dir / f"{i:02d}.png"
         print(f"\n[{i}/8] {img_file.name} を処理中...")
+        t0 = time.time()
         result = process_single_image(img_file, output_path, msg, font_path, font_size)
-        results.append(result)
+        print(f"  [{i}/8] 完了 ({time.time() - t0:.1f}秒)")
+        return i, result
+
+    tasks = [
+        (i + 1, img_file, msg)
+        for i, (img_file, msg) in enumerate(zip(image_files, messages))
+    ]
+
+    with ThreadPoolExecutor(max_workers=PARALLEL_WORKERS) as executor:
+        futures = {executor.submit(_process_one, task): task[0] for task in tasks}
+        for future in as_completed(futures):
+            idx, result = future.result()
+            results[idx - 1] = result
+
+    elapsed = time.time() - start_time
+    print(f"\n全8枚の処理完了（{elapsed:.1f}秒）")
 
     # main.png / tab.png を自動生成
     generate_main_and_tab(output_dir)
