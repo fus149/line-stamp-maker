@@ -39,7 +39,7 @@ class UploadStatus:
                 "step": step,
                 "message": message,
                 "progress": progress,
-                "logs": self.logs[-20:],
+                "logs": self.logs[-100:],
             }
             self.status_file.write_text(json.dumps(data, ensure_ascii=False), encoding="utf-8")
 
@@ -276,7 +276,10 @@ def wait_for_login(page: Page, status: UploadStatus, timeout: int = 300) -> Opti
 # ============================================================
 
 def _dismiss_modals(page: Page, status: UploadStatus):
-    """ダッシュボード上のモーダルポップアップ（キャンペーン告知等）を閉じる。"""
+    """ダッシュボード上のモーダルポップアップ（キャンペーン告知等）を閉じる。
+    重要: ページ遷移を起こさないよう、各クリック後にURL変化を検証する。"""
+
+    url_before = page.url
 
     # デバッグ: ページ上の「閉じる」を含む要素を全てスキャン
     try:
@@ -285,7 +288,6 @@ def _dismiss_modals(page: Page, status: UploadStatus):
                 const results = [];
                 const all = document.querySelectorAll('*');
                 for (const el of all) {
-                    // 直接のテキストノードに「閉じる」を含む要素のみ
                     let directText = '';
                     for (const node of el.childNodes) {
                         if (node.nodeType === 3) directText += node.textContent;
@@ -312,22 +314,29 @@ def _dismiss_modals(page: Page, status: UploadStatus):
     except Exception as e:
         status.update("デバッグ", f"スキャンエラー: {e}")
 
-    # 方法1: Playwright get_by_text (部分一致ではなくexact, .lastで末尾=モーダル優先)
+    # 「今後、この画面を表示しない」チェックボックスを先にチェック
+    _check_dont_show_again(page, status)
+
+    # 方法1: Playwright get_by_text (.lastで末尾=モーダル優先)
     for exact in [True, False]:
         try:
             locator = page.get_by_text("閉じる", exact=exact)
             count = locator.count()
             status.update("デバッグ", f"get_by_text('閉じる', exact={exact}): {count}個")
             if count > 0:
-                # 「今後、この画面を表示しない」チェックボックスを先にチェック
-                _check_dont_show_again(page, status)
-                # 末尾（モーダル内）の要素をクリック
                 target = locator.last
-                status.update("デバッグ", f"クリック対象: tag={target.evaluate('e => e.tagName')}, "
-                              f"text='{target.text_content().strip()[:30]}'")
+                tag = target.evaluate("e => e.tagName")
+                text = target.text_content().strip()[:30]
+                status.update("デバッグ", f"クリック対象: tag={tag}, text='{text}'")
                 target.click(force=True)
-                status.update("デバッグ", "「閉じる」クリック成功 (get_by_text)")
                 time.sleep(2)
+                # URL変化チェック: 誤ナビゲーション防止
+                if page.url != url_before:
+                    status.update("デバッグ", f"⚠️ URL変化検出！ {url_before} → {page.url} 戻ります")
+                    page.goto(url_before, timeout=10000)
+                    _wait_for_page_ready(page)
+                    continue  # 次のexact値で再試行
+                status.update("デバッグ", "「閉じる」クリック成功 (get_by_text)")
                 return
         except Exception as e:
             status.update("デバッグ", f"get_by_text失敗 (exact={exact}): {e}")
@@ -337,32 +346,37 @@ def _dismiss_modals(page: Page, status: UploadStatus):
         try:
             locator = page.get_by_role(role, name="閉じる")
             if locator.count() > 0:
-                _check_dont_show_again(page, status)
                 locator.last.click(force=True)
-                status.update("デバッグ", f"「閉じる」クリック成功 (role={role})")
                 time.sleep(2)
+                if page.url != url_before:
+                    status.update("デバッグ", f"⚠️ URL変化 (role={role})！戻ります")
+                    page.goto(url_before, timeout=10000)
+                    _wait_for_page_ready(page)
+                    continue
+                status.update("デバッグ", f"「閉じる」クリック成功 (role={role})")
                 return
         except Exception as e:
             status.update("デバッグ", f"get_by_role({role})失敗: {e}")
 
-    # 方法3: JavaScript - getBoundingClientRect で可視判定（offsetParent問題を回避）
+    # 方法3: JavaScript - 「閉じる」テキストのみ持つ最末尾要素をクリック（hrefなし限定）
     try:
         closed = page.evaluate("""
             (() => {
                 const all = document.querySelectorAll('a, button, [role="button"], span, div');
-                // 逆順（DOMの末尾=モーダル優先）
                 const reversed = Array.from(all).reverse();
                 for (const el of reversed) {
+                    // hrefがある要素はスキップ（ナビゲーション防止）
+                    if (el.tagName === 'A' && el.getAttribute('href')) continue;
                     let directText = '';
                     for (const node of el.childNodes) {
                         if (node.nodeType === 3) directText += node.textContent;
                     }
                     directText = directText.trim();
-                    if (directText.includes('閉じる') || directText === 'Close') {
+                    if (directText === '閉じる' || directText === 'Close') {
                         const rect = el.getBoundingClientRect();
                         if (rect.width > 0 && rect.height > 0) {
                             el.click();
-                            return {tag: el.tagName, text: directText, x: rect.x, y: rect.y};
+                            return {tag: el.tagName, text: directText};
                         }
                     }
                 }
@@ -376,33 +390,7 @@ def _dismiss_modals(page: Page, status: UploadStatus):
     except Exception as e:
         status.update("デバッグ", f"JSクリック失敗: {e}")
 
-    # 方法4: 座標クリック - ページ中央下部付近の「閉じる」ボタン位置を推定
-    try:
-        info = page.evaluate("""
-            (() => {
-                const all = document.querySelectorAll('a, button, [role="button"], span, div');
-                const reversed = Array.from(all).reverse();
-                for (const el of reversed) {
-                    const text = (el.textContent || '').trim();
-                    if (text.includes('閉じる') && text.length < 20) {
-                        const rect = el.getBoundingClientRect();
-                        if (rect.width > 0 && rect.height > 0) {
-                            return {x: rect.x + rect.width / 2, y: rect.y + rect.height / 2};
-                        }
-                    }
-                }
-                return null;
-            })()
-        """)
-        if info:
-            status.update("デバッグ", f"座標クリック: x={info['x']}, y={info['y']}")
-            page.mouse.click(info["x"], info["y"])
-            time.sleep(2)
-            return
-    except Exception as e:
-        status.update("デバッグ", f"座標クリック失敗: {e}")
-
-    # 方法5: Escapeキー
+    # 方法4: Escapeキー
     try:
         page.keyboard.press("Escape")
         status.update("デバッグ", "Escキー試行")
@@ -447,72 +435,73 @@ def _ensure_on_dashboard(page: Page, status: UploadStatus) -> bool:
 
 
 def _click_new_registration(page: Page, status: UploadStatus) -> bool:
-    """「新規登録」ボタンをクリックする。複数の戦略で試行。"""
+    """「新規登録」ボタンをクリックする。
+    証拠: ログより href=/my/{userId}/create が正しいURL。
+    el.click()はSPAルーティングで失敗する可能性があるため、page.goto(href)を最優先。"""
 
-    # 戦略1: JavaScriptで「新規登録」テキストを持つリンク/ボタンを直接クリック
-    # （モーダルのオーバーレイに関係なくDOMを直接操作）
+    original_url = page.url
+
+    # 戦略1（最優先）: hrefを抽出して page.goto() で直接遷移
+    # el.click()はSPAのisTrustedチェックで失敗する可能性があるため、goto()が最も確実
     try:
-        result = page.evaluate("""
+        href = page.evaluate("""
+            (() => {
+                const elements = document.querySelectorAll('a[href]');
+                for (const el of elements) {
+                    const text = (el.textContent || '').trim();
+                    if (text.includes('新規登録')) {
+                        return el.href;  // 絶対URLが返る
+                    }
+                }
+                return null;
+            })()
+        """)
+        if href:
+            status.update("ページ遷移", f"「新規登録」href={href}", 28)
+            page.goto(href, timeout=15000)
+            _wait_for_page_ready(page)
+            if page.url != original_url:
+                status.update("ページ遷移", f"page.goto()遷移成功: {page.url}", 30)
+                return True
+            status.update("デバッグ", "goto後もURL変化なし")
+    except Exception as e:
+        status.update("デバッグ", f"href遷移失敗: {e}")
+
+    # 戦略2: Playwrightのforce=Trueクリック
+    try:
+        btn = page.get_by_text("新規登録", exact=False).first
+        btn.click(force=True)
+        time.sleep(3)
+        _wait_for_page_ready(page)
+        if page.url != original_url:
+            status.update("ページ遷移", f"Playwrightクリック遷移成功: {page.url}", 30)
+            return True
+    except Exception as e:
+        status.update("デバッグ", f"Playwrightクリック失敗: {e}")
+
+    # 戦略3: JavaScriptで直接クリック
+    try:
+        page.evaluate("""
             (() => {
                 const elements = document.querySelectorAll('a, button, [role="button"]');
                 for (const el of elements) {
                     const text = (el.textContent || '').trim();
                     if (text.includes('新規登録')) {
                         el.click();
-                        return {text: text, href: el.href || el.getAttribute('href') || '', tag: el.tagName};
+                        return;
                     }
                 }
-                return null;
             })()
         """)
-        if result:
-            status.update("ページ遷移", f"「新規登録」JSクリック成功: {result}", 28)
-            time.sleep(3)
-            _wait_for_page_ready(page)
+        time.sleep(3)
+        _wait_for_page_ready(page)
+        if page.url != original_url:
+            status.update("ページ遷移", f"JSクリック遷移成功: {page.url}", 30)
             return True
     except Exception as e:
-        status.update("デバッグ", f"JS新規登録クリックエラー: {e}")
+        status.update("デバッグ", f"JSクリック失敗: {e}")
 
-    # 戦略2: Playwrightのforce=Trueクリック（オーバーレイを無視）
-    try:
-        links = page.locator("a, button").all()
-        for link in links:
-            try:
-                text = (link.text_content() or "").strip()
-                if "新規登録" in text:
-                    href = link.get_attribute("href") or ""
-                    status.update("ページ遷移", f"「新規登録」発見: text=\"{text}\" href=\"{href}\"", 28)
-                    link.click(force=True)
-                    time.sleep(3)
-                    _wait_for_page_ready(page)
-                    return True
-            except Exception:
-                continue
-    except Exception as e:
-        status.update("デバッグ", f"force新規登録クリックエラー: {e}")
-
-    # 戦略3: hrefから新規登録リンクを探してそのURLに直接遷移
-    try:
-        result = page.evaluate("""
-            (() => {
-                const links = document.querySelectorAll('a[href]');
-                for (const a of links) {
-                    const text = (a.textContent || '').trim();
-                    if (text.includes('新規登録') && a.href) {
-                        return a.href;
-                    }
-                }
-                return null;
-            })()
-        """)
-        if result:
-            status.update("ページ遷移", f"「新規登録」href取得: {result}", 28)
-            page.goto(result, timeout=15000)
-            _wait_for_page_ready(page)
-            return True
-    except Exception as e:
-        status.update("デバッグ", f"href遷移エラー: {e}")
-
+    status.update("デバッグ", f"新規登録クリック全戦略失敗。URL変化なし: {page.url}")
     return False
 
 
@@ -574,19 +563,31 @@ def navigate_to_new_sticker(page: Page, status: UploadStatus) -> bool:
     status.dump_page_info(page, "新規登録後")
 
     # ---- スタンプタイプ選択 ----
-    # 新規登録をクリックすると、スタンプ/絵文字/着せかえの選択画面になることがある
+    # /create ページでは スタンプ/絵文字/着せかえ の3つのボタンが表示される
+    # 証拠: debug_04_after_new_reg_click.png で確認済み
+    # 重要: サイドバーの「LINE PRスタンプ」(href含むpromotion/stickers)を誤クリックしないよう除外
     time.sleep(2)
+    type_select_url = page.url
     try:
-        # 「スタンプ」を含むリンクでhrefに"sticker"があるものを探す
         result = page.evaluate("""
             (() => {
-                const links = document.querySelectorAll('a[href]');
-                for (const a of links) {
-                    const text = (a.textContent || '').trim();
-                    const href = a.href || '';
-                    if (text.includes('スタンプ') && href.includes('sticker')) {
-                        a.click();
-                        return {text: text, href: href};
+                // まずボタン要素（<button>、<a>）から「スタンプ」テキストを探す
+                // サイドバーのリンクを除外するため：
+                // - hrefにpromotion/guideline/review/statsを含むものはスキップ
+                // - テキストが「スタンプ」のみ（「LINE PRスタンプ」等の長いテキストは除外）
+                const candidates = document.querySelectorAll('a[href], button');
+                const excluded = ['promotion', 'guideline', 'review', 'stats', 'studio'];
+                for (const el of candidates) {
+                    const text = (el.textContent || '').trim();
+                    const href = el.href || el.getAttribute('href') || '';
+                    // テキストが正確に「スタンプ」のみ（サイドバーの長い名前を除外）
+                    if (text === 'スタンプ') {
+                        // 除外パターンチェック
+                        const isExcluded = excluded.some(ex => href.includes(ex));
+                        if (!isExcluded) {
+                            el.click();
+                            return {text: text, href: href, tag: el.tagName};
+                        }
                     }
                 }
                 return null;
@@ -597,8 +598,20 @@ def navigate_to_new_sticker(page: Page, status: UploadStatus) -> bool:
             time.sleep(3)
             _wait_for_page_ready(page)
             status.save_screenshot(page, "05_after_sticker_select")
-    except Exception:
-        pass
+        else:
+            status.update("デバッグ", "「スタンプ」ボタン未検出（既にスタンプ作成ページの可能性）")
+    except Exception as e:
+        status.update("デバッグ", f"スタンプタイプ選択エラー: {e}")
+
+    # スタンプタイプ選択後にURL変化チェック
+    if page.url != type_select_url:
+        status.update("ページ遷移", f"タイプ選択後URL: {page.url}", 33)
+    # 誤ナビゲーション検知（promotionページに飛んでいないか）
+    if "promotion" in page.url:
+        status.update("デバッグ", "⚠️ promotionページに誤遷移！/createに戻ります")
+        page.go_back()
+        _wait_for_page_ready(page)
+        time.sleep(2)
 
     current_url = page.url
     status.update("ページ遷移", f"最終URL: {current_url}", 35)
