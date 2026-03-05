@@ -170,7 +170,7 @@
             </div>
           </div>
 
-          <!-- LINE登録中 -->
+          <!-- LINE登録中（進行状況） -->
           <div id="line-uploading" hidden>
             <div class="line-upload-status">
               <p style="font-weight: bold; color: #e74c3c;">⚠️ 新しく開いた「Chromium」ブラウザウィンドウでログインしてください</p>
@@ -179,7 +179,51 @@
                 <div class="progress-fill" id="line-upload-progress" style="width: 0%;"></div>
               </div>
               <p class="panel-desc" id="line-upload-status-text" style="margin-top: 0.5rem;">待機中...</p>
-              <pre id="line-upload-logs" style="max-height: 200px; overflow-y: auto; background: #f5f5f5; padding: 8px; border-radius: 8px; font-size: 11px; margin-top: 0.5rem; white-space: pre-wrap; word-break: break-all;"></pre>
+              <details id="line-upload-logs-toggle" style="margin-top: 0.5rem;">
+                <summary style="cursor: pointer; font-size: 12px; color: #888;">詳細ログを表示</summary>
+                <pre id="line-upload-logs" style="max-height: 200px; overflow-y: auto; background: #f5f5f5; padding: 8px; border-radius: 8px; font-size: 11px; margin-top: 0.5rem; white-space: pre-wrap; word-break: break-all;"></pre>
+              </details>
+            </div>
+          </div>
+
+          <!-- 審査リクエスト待機中 -->
+          <div id="line-waiting" hidden>
+            <div style="text-align: center; padding: 2rem 1rem;">
+              <div style="font-size: 64px; margin-bottom: 1rem;">
+                <span class="waiting-animation">🐾</span>
+              </div>
+              <h3 style="font-size: 1.3rem; margin-bottom: 0.5rem; color: #333;">スタンプ完成までもう少し！</h3>
+              <p class="panel-desc" style="margin-bottom: 1.5rem;">
+                画像のアップロードが完了しました。<br/>
+                審査リクエストを自動送信しています...<br/>
+                <strong>このページはそのままでお待ちください。</strong>
+              </p>
+              <div class="progress-bar" style="max-width: 300px; margin: 0 auto;">
+                <div class="progress-fill" id="line-waiting-progress" style="width: 95%; transition: width 0.5s;"></div>
+              </div>
+              <p class="panel-desc" style="margin-top: 1rem; font-size: 0.85rem; color: #999;">
+                ブラウザは裏で作業中です。閉じないでください。
+              </p>
+            </div>
+          </div>
+
+          <!-- 審査リクエスト完了 -->
+          <div id="line-complete" hidden>
+            <div style="text-align: center; padding: 2rem 1rem;">
+              <div style="font-size: 64px; margin-bottom: 1rem;">🎉</div>
+              <h3 style="font-size: 1.5rem; margin-bottom: 0.5rem; color: #06C755;">審査リクエスト完了！</h3>
+              <p class="panel-desc" style="margin-bottom: 1rem;">
+                スタンプがLINEの審査に提出されました。<br/>
+                審査には通常<strong>数日〜1週間</strong>ほどかかります。
+              </p>
+              <div style="background: #f0faf0; border-radius: 12px; padding: 1rem; margin: 1rem auto; max-width: 400px;">
+                <p style="font-size: 0.9rem; color: #333; margin: 0;">
+                  📱 審査状況は <a href="https://creator.line.me" target="_blank" style="color: #06C755; font-weight: bold;">LINE Creators Market</a> で確認できます。
+                </p>
+              </div>
+              <p class="panel-desc" style="margin-top: 1rem; font-size: 0.85rem; color: #999;">
+                審査通過後、スタンプが販売開始されます！
+              </p>
             </div>
           </div>
 

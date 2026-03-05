@@ -417,6 +417,17 @@ a:hover { text-decoration: underline; }
   to { transform: rotate(360deg); }
 }
 
+/* 待機アニメーション（足跡がぴょこぴょこ） */
+.waiting-animation {
+  display: inline-block;
+  animation: bounce 1.2s ease-in-out infinite;
+}
+
+@keyframes bounce {
+  0%, 100% { transform: translateY(0); }
+  50% { transform: translateY(-12px); }
+}
+
 .progress-bar {
   width: 100%;
   height: 6px;

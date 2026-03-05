@@ -1736,10 +1736,12 @@ def upload_to_line(
             # Step 6: 画像アップロード
             upload_images(page, output_dir, status)
 
-            # Step 7: 審査リクエスト送信
+            # Step 7: 審査リクエスト送信（バックグラウンドで進行）
+            # 画像アップロード完了をユーザーに通知し、審査リクエストは裏で進める
+            status.update("審査準備中", "画像アップロード完了！審査リクエストを自動送信中です。このページでお待ちください...", 95)
             _submit_review_request(page, status)
 
-            status.update("完了", "審査リクエスト完了！スタンプが審査に提出されました。", 100)
+            status.update("完了", "審査リクエスト完了！スタンプが審査に提出されました。LINEの審査には数日かかります。", 100)
 
             if interactive:
                 print("\n  審査リクエスト完了！")
@@ -1747,7 +1749,6 @@ def upload_to_line(
                 print("\n  ブラウザを閉じるにはEnterを押してください...")
                 input()
             else:
-                status.update("完了", "審査リクエスト完了！スタンプが審査に提出されました。5分後にブラウザが閉じます。", 100)
                 time.sleep(300)
 
             return True

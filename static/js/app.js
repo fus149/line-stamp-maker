@@ -418,10 +418,43 @@ function startStatusPolling() {
         logsEl.scrollTop = logsEl.scrollHeight;
       }
 
-      // 完了またはエラーでポーリング停止 & デバッグスクリーンショット取得
-      if (data.step === "完了" || data.step === "エラー" || data.step === "中断") {
+      // 審査準備中 → 待機画面に切り替え
+      if (data.step === "審査準備中" || data.step === "審査リクエスト") {
+        const uploading = $("#line-uploading");
+        const waiting = $("#line-waiting");
+        if (uploading) uploading.hidden = true;
+        if (waiting) waiting.hidden = false;
+        // 待機画面のプログレスバーも更新
+        const waitProgress = $("#line-waiting-progress");
+        if (waitProgress) {
+          waitProgress.style.width = (data.progress || 95) + "%";
+        }
+      }
+
+      // 完了 → 完了画面に切り替え
+      if (data.step === "完了") {
         clearInterval(statusPollTimer);
         statusPollTimer = null;
+        const uploading = $("#line-uploading");
+        const waiting = $("#line-waiting");
+        const complete = $("#line-complete");
+        if (uploading) uploading.hidden = true;
+        if (waiting) waiting.hidden = true;
+        if (complete) complete.hidden = false;
+        loadDebugScreenshots();
+      }
+
+      // エラー・中断 → ポーリング停止、進行状況画面のまま表示
+      if (data.step === "エラー" || data.step === "中断") {
+        clearInterval(statusPollTimer);
+        statusPollTimer = null;
+        // 待機画面が出ていたら進行状況画面に戻す（エラーが見えるように）
+        const waiting = $("#line-waiting");
+        const uploading = $("#line-uploading");
+        if (waiting && !waiting.hidden) {
+          waiting.hidden = true;
+          if (uploading) uploading.hidden = false;
+        }
         loadDebugScreenshots();
       }
     } catch (e) {
