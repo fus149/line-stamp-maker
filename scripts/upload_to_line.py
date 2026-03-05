@@ -920,6 +920,69 @@ def submit_creation_form(page: Page, status: UploadStatus) -> bool:
         status.dump_page_info(page, "保存ボタン未検出")
         return False
 
+    # 確認ダイアログ「保存しますか？」の処理
+    # 証拠(session 8a2f7dad): 保存ボタン(SPAN)クリック後に確認モーダルが出現
+    # 「キャンセル」「OK」ボタンが表示される → OKをクリックする必要がある
+    time.sleep(2)
+    status.save_screenshot(page, "07c_after_save_click")
+
+    ok_clicked = False
+
+    # 方法1: Playwright get_by_text で「OK」を探す
+    try:
+        ok_btn = page.get_by_text("OK", exact=True)
+        if ok_btn.count() > 0:
+            ok_btn.last.click()
+            status.update("フォーム送信", "確認ダイアログ「OK」クリック", 58)
+            ok_clicked = True
+    except Exception as e:
+        status.update("デバッグ", f"OK検索失敗(get_by_text): {e}")
+
+    # 方法2: get_by_role で確認ボタンを探す
+    if not ok_clicked:
+        try:
+            for role in ["button", "link"]:
+                ok_role = page.get_by_role(role, name="OK")
+                if ok_role.count() > 0:
+                    ok_role.last.click()
+                    status.update("フォーム送信", f"確認ダイアログ「OK」クリック (role={role})", 58)
+                    ok_clicked = True
+                    break
+        except Exception as e:
+            status.update("デバッグ", f"OK検索失敗(get_by_role): {e}")
+
+    # 方法3: JSで確認ダイアログ内の「OK」ボタンを探してクリック
+    if not ok_clicked:
+        try:
+            js_ok = page.evaluate("""
+                (() => {
+                    const all = document.querySelectorAll('button, a, [role="button"], span, div');
+                    for (const el of Array.from(all).reverse()) {
+                        const rect = el.getBoundingClientRect();
+                        if (rect.width === 0 || rect.height === 0) continue;
+                        let text = '';
+                        for (const node of el.childNodes) {
+                            if (node.nodeType === 3) text += node.textContent;
+                        }
+                        text = text.trim();
+                        if (!text) text = (el.textContent || '').trim();
+                        if (text === 'OK' || text === 'はい' || text === '確認') {
+                            el.click();
+                            return {text, tag: el.tagName};
+                        }
+                    }
+                    return null;
+                })()
+            """)
+            if js_ok:
+                status.update("フォーム送信", f"確認ダイアログクリック(JS): {js_ok}", 58)
+                ok_clicked = True
+        except Exception as e:
+            status.update("デバッグ", f"OK検索失敗(JS): {e}")
+
+    if ok_clicked:
+        status.update("フォーム送信", "確認ダイアログを承認。ページ遷移を待機中...", 58)
+
     # ページ遷移を待つ
     time.sleep(5)
     _wait_for_page_ready(page)
