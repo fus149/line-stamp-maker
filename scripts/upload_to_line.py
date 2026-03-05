@@ -87,6 +87,25 @@ class UploadStatus:
 # ページ状態判定ヘルパー
 # ============================================================
 
+def _minimize_browser(page: Page, status: UploadStatus):
+    """Chromiumブラウザウィンドウを最小化する。
+    画像アップロード完了後、ユーザーにはWebアプリの待機画面だけ見せるために使用。
+    CDP (Chrome DevTools Protocol) でウィンドウを最小化する。
+    """
+    try:
+        cdp = page.context.new_cdp_session(page)
+        window = cdp.send("Browser.getWindowForTarget")
+        window_id = window["windowId"]
+        cdp.send("Browser.setWindowBounds", {
+            "windowId": window_id,
+            "bounds": {"windowState": "minimized"}
+        })
+        cdp.detach()
+        status.update("デバッグ", "ブラウザを最小化しました")
+    except Exception as e:
+        status.update("デバッグ", f"ブラウザ最小化失敗（動作に影響なし）: {e}")
+
+
 def _wait_for_page_ready(page: Page, timeout: int = 10):
     """ページの読み込み完了を待つ。"""
     try:
@@ -1739,6 +1758,10 @@ def upload_to_line(
             # Step 7: 審査リクエスト送信（バックグラウンドで進行）
             # 画像アップロード完了をユーザーに通知し、審査リクエストは裏で進める
             status.update("審査準備中", "画像アップロード完了！審査リクエストを自動送信中です。このページでお待ちください...", 95)
+
+            # ブラウザを最小化して裏で作業（ユーザーにはWebアプリの待機画面だけ見せる）
+            _minimize_browser(page, status)
+
             _submit_review_request(page, status)
 
             status.update("完了", "審査リクエスト完了！スタンプが審査に提出されました。LINEの審査には数日かかります。", 100)
