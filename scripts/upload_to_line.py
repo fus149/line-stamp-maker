@@ -486,6 +486,86 @@ def _force_dismiss_qr_modal(page: Page, status: UploadStatus):
         status.update("デバッグ", f"QRモーダル強制削除失敗: {e}")
 
 
+def _classify_file_inputs(page: Page, fi_count: int, status: UploadStatus) -> dict:
+    """file inputをaccept属性・親要素のテキストで分類する。
+    証拠(session ecc8cc27): fi_count=11でnth(0)がZIP用inputの可能性
+    → main/tabにスタンプ画像が入りError
+
+    Returns:
+        {"main": int|None, "tab": int|None, "stickers": [int,...], "zip": int|None}
+    """
+    result = {"main": None, "tab": None, "stickers": [], "zip": None}
+    try:
+        info = page.evaluate(f"""
+            (() => {{
+                const inputs = document.querySelectorAll('input[type="file"]');
+                const result = [];
+                for (let i = 0; i < inputs.length; i++) {{
+                    const inp = inputs[i];
+                    const accept = inp.getAttribute('accept') || '';
+                    // 親要素のテキストでスロット種別を判定
+                    let parentText = '';
+                    let el = inp.parentElement;
+                    for (let j = 0; j < 5 && el; j++) {{
+                        const label = el.querySelector('span, p, div, label');
+                        if (label) {{
+                            parentText = label.textContent.trim().slice(0, 50);
+                            break;
+                        }}
+                        el = el.parentElement;
+                    }}
+                    // data属性やクラスも収集
+                    const cls = (inp.className || '') + ' ' + (inp.parentElement?.className || '');
+                    result.push({{
+                        index: i,
+                        accept: accept,
+                        parentText: parentText,
+                        cls: cls.slice(0, 100)
+                    }});
+                }}
+                return result;
+            }})()
+        """)
+        status.update("デバッグ", f"file input分類: {info}")
+
+        for item in info:
+            idx = item["index"]
+            accept = item.get("accept", "")
+            parent = item.get("parentText", "")
+
+            # ZIP用input判定
+            if ".zip" in accept or "zip" in accept.lower():
+                result["zip"] = idx
+                continue
+
+            # ラベルテキストでmain/tab判定
+            lower_parent = parent.lower()
+            if "main" in lower_parent or "メイン" in parent:
+                result["main"] = idx
+            elif "tab" in lower_parent or "タブ" in parent or "トークルーム" in parent:
+                result["tab"] = idx
+            else:
+                # 番号付きスタンプスロット or その他画像input
+                result["stickers"].append(idx)
+
+        # main/tabが見つからない場合、stickersの先頭2つをmain/tabとして使う
+        if result["main"] is None and len(result["stickers"]) > len(info) - 3:
+            result["main"] = result["stickers"].pop(0)
+        if result["tab"] is None and len(result["stickers"]) > len(info) - 3:
+            result["tab"] = result["stickers"].pop(0)
+
+        status.update("デバッグ", f"分類結果: main={result['main']}, tab={result['tab']}, "
+                       f"stickers={result['stickers']}, zip={result['zip']}")
+    except Exception as e:
+        status.update("デバッグ", f"file input分類失敗: {e}")
+        # フォールバック: 従来のオフセット方式
+        result["main"] = 0
+        result["tab"] = 1
+        result["stickers"] = list(range(2, fi_count))
+
+    return result
+
+
 def _check_dont_show_again(page: Page, status: UploadStatus):
     """「今後、この画面を表示しない」チェックボックスがあればチェック。"""
     try:
@@ -1221,33 +1301,42 @@ def upload_images(page: Page, output_dir: Path, status: UploadStatus):
     status.update("画像アップ", f"file input数: {fi_count}", 66)
 
     if fi_count >= total:
-        # file inputの構成を判定:
-        # fi_count > total → 先頭にmain/tabスロットがある（例: 11 = main + tab + 01〜08 + ZIP?）
-        # 証拠(session b45b0b87-3回目): fi_count=11, total=8
-        #   nth(0)=main, nth(1)=tab, nth(2〜9)=sticker 01〜08
-        offset = 0
-        if fi_count > total and has_main and has_tab:
-            # main.pngをアップロード
+        # file inputをaccept属性とコンテキストで分類
+        # 証拠(session ecc8cc27): nth(0)がZIP用inputの可能性あり
+        # → accept属性やラベルで判別する
+        fi_map = _classify_file_inputs(page, fi_count, status)
+
+        # main.pngをアップロード
+        if has_main and fi_map.get("main") is not None:
             try:
-                file_inputs.nth(0).set_input_files(str(main_file))
-                status.update("画像アップ", "main.png アップロードOK", 66)
+                file_inputs.nth(fi_map["main"]).set_input_files(str(main_file))
+                status.update("画像アップ", f"main.png → input[{fi_map['main']}] OK", 66)
                 time.sleep(1)
             except Exception as e:
                 status.update("画像アップ", f"main.png 失敗: {e}")
-            # tab.pngをアップロード
+
+        # tab.pngをアップロード
+        if has_tab and fi_map.get("tab") is not None:
             try:
-                file_inputs.nth(1).set_input_files(str(tab_file))
-                status.update("画像アップ", "tab.png アップロードOK", 67)
+                file_inputs.nth(fi_map["tab"]).set_input_files(str(tab_file))
+                status.update("画像アップ", f"tab.png → input[{fi_map['tab']}] OK", 67)
                 time.sleep(1)
             except Exception as e:
                 status.update("画像アップ", f"tab.png 失敗: {e}")
-            offset = 2  # スタンプ画像はnth(2)から
+
+        # スタンプ画像のfile inputインデックスリスト
+        sticker_indices = fi_map.get("stickers", [])
 
         # スタンプ画像を各inputに1枚ずつ
         for i, stamp_file in enumerate(stamp_files):
             try:
-                file_inputs.nth(i + offset).set_input_files(str(stamp_file))
-                status.update("画像アップ", f"[{i+1}/{total}] {stamp_file.name} OK", 65 + int((i+1)/total*25))
+                if i < len(sticker_indices):
+                    idx = sticker_indices[i]
+                else:
+                    # フォールバック: 分類外のinputを順番に使う
+                    idx = i + (fi_count - total)
+                file_inputs.nth(idx).set_input_files(str(stamp_file))
+                status.update("画像アップ", f"[{i+1}/{total}] {stamp_file.name} → input[{idx}] OK", 65 + int((i+1)/total*25))
                 time.sleep(1)
             except Exception as e:
                 status.update("画像アップ", f"[{i+1}/{total}] {stamp_file.name} 失敗: {e}")
