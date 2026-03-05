@@ -436,6 +436,40 @@ def _dismiss_modals(page: Page, status: UploadStatus):
     status.update("デバッグ", "モーダル閉じ: 全方法失敗")
 
 
+def _force_dismiss_qr_modal(page: Page, status: UploadStatus):
+    """QRコードモーダル(FnOaQrcode)をJavaScriptで強制的に閉じる。
+    証拠(session b45b0b87): QRモーダルが画像アップロードのクリックをブロック:
+    - <div role="dialog" class="MdPOP01Modal ... FnOaQrcode"> intercepts pointer events
+    - 毎回の画像アップロード試行で30秒タイムアウト
+    """
+    try:
+        removed = page.evaluate("""
+            (() => {
+                // QRコードモーダルを検索して削除
+                const modals = document.querySelectorAll('.FnOaQrcode, .MdPop24OAQRcode');
+                let removed = 0;
+                for (const modal of modals) {
+                    // モーダル自身またはその親ダイアログを削除
+                    const dialog = modal.closest('[role="dialog"]') || modal;
+                    dialog.remove();
+                    removed++;
+                }
+                // バックドロップも削除
+                const backdrops = document.querySelectorAll('.ExBackdrop');
+                for (const bd of backdrops) {
+                    bd.remove();
+                    removed++;
+                }
+                return removed;
+            })()
+        """)
+        if removed and removed > 0:
+            status.update("デバッグ", f"QRモーダル強制削除: {removed}要素")
+            time.sleep(0.5)
+    except Exception as e:
+        status.update("デバッグ", f"QRモーダル強制削除失敗: {e}")
+
+
 def _check_dont_show_again(page: Page, status: UploadStatus):
     """「今後、この画面を表示しない」チェックボックスがあればチェック。"""
     try:
@@ -1075,6 +1109,42 @@ def upload_images(page: Page, output_dir: Path, status: UploadStatus):
     total = len(stamp_files)
     status.update("画像アップ", f"スタンプ画像をアップロード中... ({total}枚)", 65)
 
+    # QRコードモーダルを強制削除（画像アップロードを妨害するため）
+    # 証拠(session b45b0b87): FnOaQrcodeモーダルが全クリックをブロック
+    _force_dismiss_qr_modal(page, status)
+    _dismiss_modals(page, status)
+    time.sleep(1)
+
+    # 「スタンプ画像」タブに切り替え
+    # 証拠(session b45b0b87): 保存後は表示情報タブのままでfile input数=0
+    try:
+        # SPAナビゲーション: URLフラグメントで#/imageに遷移
+        current_url = page.url
+        if "#/image" not in current_url:
+            # まずタブクリックを試行
+            tab_clicked = False
+            for tab_text in ["スタンプ画像", "Sticker Images"]:
+                try:
+                    tab = page.get_by_text(tab_text, exact=True)
+                    if tab.count() > 0 and tab.first.is_visible(timeout=2000):
+                        tab.first.click()
+                        tab_clicked = True
+                        status.update("画像アップ", f"「{tab_text}」タブをクリック")
+                        time.sleep(2)
+                        break
+                except Exception:
+                    continue
+            if not tab_clicked:
+                # URLフラグメントで直接遷移
+                base_url = current_url.split("#")[0]
+                page.goto(f"{base_url}#/image", timeout=15000)
+                status.update("画像アップ", "#/image に直接遷移")
+                time.sleep(2)
+            # 遷移後にモーダルが再出現する可能性
+            _force_dismiss_qr_modal(page, status)
+    except Exception as e:
+        status.update("デバッグ", f"スタンプ画像タブ遷移失敗: {e}")
+
     # デバッグ: 現在のページ構造を記録
     status.save_screenshot(page, "09_upload_page")
     status.dump_page_info(page, "画像アップロードページ")
@@ -1117,6 +1187,9 @@ def upload_images(page: Page, output_dir: Path, status: UploadStatus):
     for i, stamp_file in enumerate(stamp_files):
         progress = 65 + int((i + 1) / total * 25)
         try:
+            # 毎回モーダルを強制削除（ページ操作中に再出現するため）
+            _force_dismiss_qr_modal(page, status)
+
             # 空のスタンプスロット/追加ボタンを探す
             slot_clicked = False
 
