@@ -279,13 +279,15 @@ def _draw_outlined_text(
 def _add_text(
     img: Image.Image,
     text: str,
-    text_position: str,
+    text_position: Optional[str] = None,
     font_id: Optional[str] = None,
     font_size: int = 32,
     text_color: str = "white",
     vertical: bool = False,
+    text_x: int = -1,
+    text_y: int = -1,
 ) -> Image.Image:
-    """テキストを追加する。色・位置・縦横書きに対応。"""
+    """テキストを追加する。座標指定 or 名前付き位置に対応。"""
     font = _load_font(font_id, font_size)
     draw = ImageDraw.Draw(img)
 
@@ -297,10 +299,18 @@ def _add_text(
         fill = (255, 255, 255, 255)
         outline = (0, 0, 0, 255)
 
-    if vertical:
-        _add_text_vertical(draw, text, text_position, font, fill, outline)
-    else:
-        _add_text_horizontal(draw, text, text_position, font, fill, outline)
+    if text_x >= 0 and text_y >= 0:
+        # 座標モード（エディタ用）
+        if vertical:
+            _add_text_vertical_at(draw, text, text_x, text_y, font, fill, outline)
+        else:
+            _add_text_horizontal_at(draw, text, text_x, text_y, font, fill, outline)
+    elif text_position:
+        # 名前付き位置モード（自動生成用）
+        if vertical:
+            _add_text_vertical(draw, text, text_position, font, fill, outline)
+        else:
+            _add_text_horizontal(draw, text, text_position, font, fill, outline)
 
     return img
 
@@ -377,6 +387,58 @@ def _add_text_vertical(
     else:
         cx = STAMP_WIDTH // 2
         y_start = MARGIN + 5
+
+    y_cursor = y_start
+    for i, ch in enumerate(text):
+        ch_w, ch_h = char_sizes[i]
+        x = cx - ch_w // 2
+        _draw_outlined_text(draw, (x, y_cursor), ch, font, fill, outline)
+        y_cursor += ch_h + spacing
+
+
+def _add_text_horizontal_at(
+    draw: ImageDraw.ImageDraw,
+    text: str,
+    text_x: int,
+    text_y: int,
+    font: ImageFont.FreeTypeFont,
+    fill: Tuple[int, int, int, int],
+    outline: Tuple[int, int, int, int],
+) -> None:
+    """横書きテキストを指定座標の中心に描画する。"""
+    max_w = STAMP_WIDTH - 20
+    text = _wrap_text(text, font, max_w)
+
+    bbox = draw.textbbox((0, 0), text, font=font)
+    text_w = bbox[2] - bbox[0]
+    text_h = bbox[3] - bbox[1]
+
+    x = text_x - text_w // 2
+    y = text_y - text_h // 2
+
+    _draw_outlined_text(draw, (x, y), text, font, fill, outline)
+
+
+def _add_text_vertical_at(
+    draw: ImageDraw.ImageDraw,
+    text: str,
+    text_x: int,
+    text_y: int,
+    font: ImageFont.FreeTypeFont,
+    fill: Tuple[int, int, int, int],
+    outline: Tuple[int, int, int, int],
+) -> None:
+    """縦書きテキストを指定座標の中心に描画する。"""
+    char_sizes = []
+    for ch in text:
+        bbox = draw.textbbox((0, 0), ch, font=font)
+        char_sizes.append((bbox[2] - bbox[0], bbox[3] - bbox[1]))
+
+    spacing = 2
+    total_h = sum(h for _, h in char_sizes) + spacing * (len(text) - 1) if text else 0
+
+    cx = text_x
+    y_start = text_y - total_h // 2
 
     y_cursor = y_start
     for i, ch in enumerate(text):

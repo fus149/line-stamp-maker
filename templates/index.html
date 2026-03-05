@@ -4,7 +4,7 @@
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
   <title>LINEスタンプ自動でつくるくん</title>
-  <link rel="stylesheet" href="/static/css/style.css" />
+  <link rel="stylesheet" href="/static/css/style.css?v=2" />
 </head>
 <body>
   <div class="app">
@@ -322,14 +322,8 @@
               </div>
             </div>
             <div class="editor-controls">
-              <label class="control-label">配置:</label>
-              <div class="toggle-btns">
-                <button class="btn btn-ghost btn-sm text-pos-btn" data-pos="top">上</button>
-                <button class="btn btn-ghost btn-sm text-pos-btn active" data-pos="bottom">下</button>
-                <button class="btn btn-ghost btn-sm text-pos-btn" data-pos="left">左</button>
-                <button class="btn btn-ghost btn-sm text-pos-btn" data-pos="right">右</button>
-                <button class="btn btn-ghost btn-sm text-pos-btn" data-pos="none">なし</button>
-              </div>
+              <label class="control-label">配置: <span class="text-place-hint">テキストツール選択中にキャンバスをタップ</span></label>
+              <button class="btn btn-ghost btn-sm" id="btn-clear-text-pos">配置をクリア</button>
             </div>
           </div>
 
@@ -353,6 +347,6 @@
     </footer>
   </div>
 
-  <script src="/static/js/app.js"></script>
+  <script src="/static/js/app.js?v=2"></script>
 </body>
 </html>

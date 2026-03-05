@@ -144,7 +144,8 @@ async def update_stamp(
     filename: str,
     image: UploadFile = File(...),
     text: str = Form(""),
-    text_position: str = Form("none"),
+    text_x: str = Form("-1"),
+    text_y: str = Form("-1"),
     font_id: str = Form("zen-maru"),
     text_color: str = Form("white"),
     vertical: str = Form("false"),
@@ -180,12 +181,13 @@ async def update_stamp(
     img.save(str(base_path), "PNG")
 
     # テキストがあればサーバー側で描画して最終画像を作成
-    valid_positions = ("top", "bottom", "left", "right")
     is_vertical = vertical.lower() in ("true", "1", "yes")
-    if text.strip() and text_position in valid_positions:
+    tx, ty = int(text_x), int(text_y)
+    if text.strip() and tx >= 0 and ty >= 0:
         final_img = img.copy()
         final_img = _add_text(
-            final_img, text.strip(), text_position,
+            final_img, text.strip(),
+            text_x=tx, text_y=ty,
             font_id=font_id, text_color=text_color, vertical=is_vertical,
         )
         final_img.save(str(stamp_path), "PNG")

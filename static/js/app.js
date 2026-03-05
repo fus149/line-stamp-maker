@@ -24,7 +24,6 @@ const state = {
   dragStartX: 0,
   dragStartY: 0,
   stampMessages: [],
-  stampTextPositions: [],
   moveBaseImageData: null,
   // テキスト拡張
   selectedFont: "zen-maru",
@@ -33,6 +32,12 @@ const state = {
   stampFonts: [],
   stampTextColors: [],
   stampVerticals: [],
+  // テキスト座標
+  textX: null,
+  textY: null,
+  isDraggingText: false,
+  stampTextX: [],
+  stampTextY: [],
 };
 
 const FONT_FAMILY_MAP = {
@@ -341,7 +346,11 @@ function showResult(data) {
 
   // メッセージとテキスト位置を保存（エディターで使用）
   state.stampMessages = data.messages || [];
-  state.stampTextPositions = data.text_positions || [];
+  // 名前付き位置を座標に変換
+  const posToCoords = { top: [185, 35], bottom: [185, 280], left: [42, 160], right: [327, 160] };
+  const positions = data.text_positions || [];
+  state.stampTextX = positions.map(p => posToCoords[p] ? posToCoords[p][0] : null);
+  state.stampTextY = positions.map(p => posToCoords[p] ? posToCoords[p][1] : null);
 
   const grid = $("#result-grid");
   grid.innerHTML = "";
@@ -595,13 +604,11 @@ function initEditor() {
   $("#editor-prev").addEventListener("click", () => navigateStamp(-1));
   $("#editor-next").addEventListener("click", () => navigateStamp(1));
 
-  // テキスト位置ボタン
-  $$(".text-pos-btn").forEach((btn) => {
-    btn.addEventListener("click", () => {
-      $$(".text-pos-btn").forEach((b) => b.classList.remove("active"));
-      btn.classList.add("active");
-      renderTextPreview();
-    });
+  // テキスト配置クリア
+  $("#btn-clear-text-pos").addEventListener("click", () => {
+    state.textX = null;
+    state.textY = null;
+    renderTextPreview();
   });
 
   // テキスト入力でリアルタイムプレビュー
@@ -640,6 +647,8 @@ function updateCanvasCursor() {
     canvas.style.cursor = "crosshair";
   } else if (state.activeTool === "move") {
     canvas.style.cursor = "grab";
+  } else if (state.activeTool === "text") {
+    canvas.style.cursor = "crosshair";
   } else {
     canvas.style.cursor = "default";
   }
@@ -696,10 +705,9 @@ function openEditor(index) {
   // テキスト入力欄に現在のメッセージを設定
   const currentMsg = state.stampMessages[index] || "";
   $("#editor-text-input").value = currentMsg || "";
-  const currentPos = state.stampTextPositions[index] || "none";
-  $$(".text-pos-btn").forEach((b) => {
-    b.classList.toggle("active", b.dataset.pos === (currentPos || "none"));
-  });
+  // テキスト座標を復元
+  state.textX = state.stampTextX[index] != null ? state.stampTextX[index] : null;
+  state.textY = state.stampTextY[index] != null ? state.stampTextY[index] : null;
 
   // フォント・色・方向を復元
   state.selectedFont = state.stampFonts[index] || "zen-maru";
@@ -740,6 +748,9 @@ function onCanvasPointerDown(e) {
     state.dragStartX = e.clientX - rect.left;
     state.dragStartY = e.clientY - rect.top;
     e.target.style.cursor = "grabbing";
+  } else if (state.activeTool === "text") {
+    state.isDraggingText = true;
+    placeTextAt(e);
   }
 }
 
@@ -757,6 +768,8 @@ function onCanvasPointerMove(e) {
     state.dragStartX = x;
     state.dragStartY = y;
     redrawMoveCanvas();
+  } else if (state.activeTool === "text" && state.isDraggingText) {
+    placeTextAt(e);
   }
 }
 
@@ -766,6 +779,20 @@ function onCanvasPointerUp(e) {
   }
   isErasing = false;
   state.isDragging = false;
+  state.isDraggingText = false;
+}
+
+function placeTextAt(e) {
+  const canvas = $("#editor-canvas");
+  const rect = canvas.getBoundingClientRect();
+  const scaleX = 370 / rect.width;
+  const scaleY = 320 / rect.height;
+  state.textX = Math.round((e.clientX - rect.left) * scaleX);
+  state.textY = Math.round((e.clientY - rect.top) * scaleY);
+  // 範囲内に制限
+  state.textX = Math.max(0, Math.min(370, state.textX));
+  state.textY = Math.max(0, Math.min(320, state.textY));
+  renderTextPreview();
 }
 
 function eraseAt(e) {
@@ -780,15 +807,12 @@ function eraseAt(e) {
 
   ctx.save();
   ctx.globalCompositeOperation = "destination-out";
-  // ぼかし丸: radialGradient で中心→外へ徐々に透明に
-  const gradient = ctx.createRadialGradient(x, y, 0, x, y, radius);
-  gradient.addColorStop(0, "rgba(0,0,0,1)");
-  gradient.addColorStop(0.5, "rgba(0,0,0,0.8)");
-  gradient.addColorStop(0.8, "rgba(0,0,0,0.3)");
-  gradient.addColorStop(1, "rgba(0,0,0,0)");
-  ctx.fillStyle = gradient;
+  // ぼかし丸: blurフィルタでソフトエッジ
+  const blurAmount = Math.max(radius * 0.4, 3);
+  ctx.filter = `blur(${blurAmount}px)`;
+  ctx.fillStyle = "rgba(0,0,0,1)";
   ctx.beginPath();
-  ctx.arc(x, y, radius, 0, Math.PI * 2);
+  ctx.arc(x, y, radius * 0.7, 0, Math.PI * 2);
   ctx.fill();
   ctx.restore();
 }
@@ -825,16 +849,20 @@ function renderTextPreview() {
   ctx.clearRect(0, 0, 370, 320);
 
   const text = $("#editor-text-input").value.trim();
-  const activePosBtn = $(".text-pos-btn.active");
-  const textPosition = activePosBtn ? activePosBtn.dataset.pos : "none";
+  if (!text) return;
 
-  if (!text || textPosition === "none") return;
+  // 座標未設定 → ヒント表示
+  if (state.textX == null || state.textY == null) {
+    ctx.font = '14px sans-serif';
+    ctx.fillStyle = "rgba(0,0,0,0.5)";
+    ctx.textAlign = "center";
+    ctx.textBaseline = "middle";
+    ctx.fillText("テキストツールでキャンバスをタップ", 370 / 2, 320 / 2);
+    return;
+  }
 
-  // サーバー側の定数に合わせる
   const fontSize = 32;
-  const margin = 15;
   const outlineWidth = 3;
-  const textAreaWidth = 55;
   const fontFamily = FONT_FAMILY_MAP[state.selectedFont] || "Zen Maru Gothic";
 
   // 色設定
@@ -851,44 +879,26 @@ function renderTextPreview() {
   ctx.lineJoin = "round";
 
   if (state.vertical) {
-    renderVerticalText(ctx, text, textPosition, fontSize, margin, outlineWidth, textAreaWidth, fillColor, strokeColor);
+    renderVerticalText(ctx, text, state.textX, state.textY, fontSize, outlineWidth, fillColor, strokeColor);
   } else {
-    renderHorizontalText(ctx, text, textPosition, fontSize, margin, outlineWidth, textAreaWidth, fillColor, strokeColor);
+    renderHorizontalText(ctx, text, state.textX, state.textY, fontSize, outlineWidth, fillColor, strokeColor);
   }
 }
 
-function renderHorizontalText(ctx, text, pos, fontSize, margin, outlineWidth, textAreaWidth, fillColor, strokeColor) {
+function renderHorizontalText(ctx, text, tx, ty, fontSize, outlineWidth, fillColor, strokeColor) {
   ctx.textAlign = "center";
-  ctx.textBaseline = "top";
-
-  const metrics = ctx.measureText(text);
-  const textH = fontSize;
-  let x, y;
-
-  if (pos === "bottom") {
-    x = 370 / 2;
-    y = 320 - textH - margin - 5;
-  } else if (pos === "top") {
-    x = 370 / 2;
-    y = margin + 5;
-  } else if (pos === "left") {
-    x = margin + textAreaWidth / 2;
-    y = (320 - textH) / 2;
-  } else if (pos === "right") {
-    x = 370 - margin - textAreaWidth / 2;
-    y = (320 - textH) / 2;
-  }
+  ctx.textBaseline = "middle";
 
   // 縁取り
   ctx.strokeStyle = strokeColor;
   ctx.lineWidth = outlineWidth * 2;
-  ctx.strokeText(text, x, y);
+  ctx.strokeText(text, tx, ty);
   // 本文
   ctx.fillStyle = fillColor;
-  ctx.fillText(text, x, y);
+  ctx.fillText(text, tx, ty);
 }
 
-function renderVerticalText(ctx, text, pos, fontSize, margin, outlineWidth, textAreaWidth, fillColor, strokeColor) {
+function renderVerticalText(ctx, text, tx, ty, fontSize, outlineWidth, fillColor, strokeColor) {
   ctx.textAlign = "center";
   ctx.textBaseline = "top";
 
@@ -897,27 +907,13 @@ function renderVerticalText(ctx, text, pos, fontSize, margin, outlineWidth, text
   let totalH = 0;
   const charHeights = [];
   for (const ch of text) {
-    const m = ctx.measureText(ch);
-    const h = fontSize;
-    charHeights.push(h);
-    totalH += h + spacing;
+    charHeights.push(fontSize);
+    totalH += fontSize + spacing;
   }
   totalH -= spacing;
 
-  let cx, yStart;
-  if (pos === "left") {
-    cx = margin + fontSize / 2 + 5;
-    yStart = (320 - totalH) / 2;
-  } else if (pos === "right") {
-    cx = 370 - margin - fontSize / 2 - 5;
-    yStart = (320 - totalH) / 2;
-  } else if (pos === "top") {
-    cx = 370 / 2;
-    yStart = margin + 5;
-  } else if (pos === "bottom") {
-    cx = 370 / 2;
-    yStart = 320 - totalH - margin - 5;
-  }
+  const cx = tx;
+  const yStart = ty - totalH / 2;
 
   let yCursor = yStart;
   for (let i = 0; i < text.length; i++) {
@@ -975,13 +971,12 @@ async function saveEditedStamp() {
 
     // テキスト情報を取得
     const text = $("#editor-text-input").value.trim();
-    const activePosBtn = $(".text-pos-btn.active");
-    const textPosition = activePosBtn ? activePosBtn.dataset.pos : "none";
 
     const formData = new FormData();
     formData.append("image", blob, state.editingFilename);
     formData.append("text", text);
-    formData.append("text_position", textPosition);
+    formData.append("text_x", state.textX != null ? Math.round(state.textX) : -1);
+    formData.append("text_y", state.textY != null ? Math.round(state.textY) : -1);
     formData.append("font_id", state.selectedFont);
     formData.append("text_color", state.textColor);
     formData.append("vertical", state.vertical);
@@ -998,7 +993,8 @@ async function saveEditedStamp() {
 
     // ステートを更新
     state.stampMessages[state.editingIndex] = text;
-    state.stampTextPositions[state.editingIndex] = textPosition === "none" ? null : textPosition;
+    state.stampTextX[state.editingIndex] = state.textX;
+    state.stampTextY[state.editingIndex] = state.textY;
     state.stampFonts[state.editingIndex] = state.selectedFont;
     state.stampTextColors[state.editingIndex] = state.textColor;
     state.stampVerticals[state.editingIndex] = state.vertical;

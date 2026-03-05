@@ -797,15 +797,16 @@ a:hover { text-decoration: underline; }
   font-size: 0.8rem;
 }
 
-/* Text position buttons */
-.text-pos-btns {
-  display: flex;
-  gap: 0.3rem;
+/* Text placement hint */
+.text-place-hint {
+  font-size: 0.75rem;
+  color: var(--text-sub);
+  font-weight: normal;
 }
 
-.text-pos-btn.active {
-  background: var(--green);
-  color: #fff;
+#btn-clear-text-pos {
+  color: #dc2626;
+  border-color: #dc2626;
 }
 
 /* --- Responsive --- */
