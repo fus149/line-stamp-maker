@@ -101,12 +101,16 @@ def _is_on_dashboard(page: Page) -> bool:
 def _is_logged_in_by_elements(page: Page) -> bool:
     """ページ上の要素でログイン済みか判定する（URLに依存しない）。"""
     selectors = [
+        # ダッシュボード上のナビ要素
         "a:has-text('アイテム管理')",
         "a:has-text('新規登録')",
         "a:has-text('アカウント設定')",
         "a:has-text('ログアウト')",
         "a:has-text('Log Out')",
         "a[href*='/my/']",
+        # トップページ上のナビ要素（ログイン済み時のみ表示）
+        "a:has-text('マイページ')",
+        "a:has-text('My Page')",
     ]
     for sel in selectors:
         try:
@@ -115,6 +119,19 @@ def _is_logged_in_by_elements(page: Page) -> bool:
         except Exception:
             continue
     return False
+
+
+def _is_on_creator_top_page(url: str) -> bool:
+    """creator.line.meのトップページにいるか判定。"""
+    if "creator.line.me" not in url:
+        return False
+    if "access.line.me" in url:
+        return False
+    if "/my/" in url:
+        return False
+    if "/signup/" in url:
+        return False
+    return True
 
 
 def _find_logged_in_page(context, status: UploadStatus) -> Optional[Page]:
@@ -141,6 +158,26 @@ def _find_logged_in_page(context, status: UploadStatus) -> Optional[Page]:
                 if _is_logged_in_by_elements(p):
                     status.update("ログイン", f"ログイン済みページ発見: {url[:100]}", 20)
                     return p
+
+                # トップページにいる場合、/signup/line_auth に再遷移してダッシュボードリダイレクトを試みる
+                if _is_on_creator_top_page(url):
+                    status.update("ログイン", f"トップページ検出。ダッシュボードへリダイレクト試行...", 15)
+                    try:
+                        p.goto(LOGIN_URL, timeout=15000)
+                        _wait_for_page_ready(p)
+                        new_url = p.url
+                        status.update("ログイン", f"リダイレクト先: {new_url[:100]}", 15)
+                        if "/my/" in new_url:
+                            return p
+                        # まだログインページに飛ばされた → 未ログイン
+                        if "access.line.me" in new_url:
+                            status.update("ログイン", "未ログイン状態。ログインページに戻りました。", 10)
+                            continue
+                        # creator.line.me のどこかにいる
+                        if _is_logged_in_by_elements(p):
+                            return p
+                    except Exception as e:
+                        status.update("デバッグ", f"リダイレクト試行失敗: {e}")
 
             # OAuth コールバック中のページ
             if "/signup/line_callback" in url:
@@ -219,17 +256,15 @@ def wait_for_login(page: Page, status: UploadStatus, timeout: int = 300) -> Opti
             status.update("ログイン", "ログイン完了！", 20)
             status.save_screenshot(logged_in_page, "02_login_done")
 
-            # ダッシュボードにいない場合、マイページリンクで移動
+            # ダッシュボードにいない場合、/signup/line_auth に再遷移してダッシュボードリダイレクトを試行
             if "/my/" not in logged_in_page.url:
+                status.update("ログイン", "ダッシュボードへ移動中...", 20)
                 try:
-                    mypage_link = logged_in_page.locator("a[href*='/my/'], a:has-text('マイページ')").first
-                    if mypage_link.is_visible(timeout=2000):
-                        mypage_link.click()
-                        time.sleep(3)
-                        _wait_for_page_ready(logged_in_page)
-                        status.update("ログイン", f"マイページに遷移: {logged_in_page.url[:100]}", 20)
-                except Exception:
-                    pass
+                    logged_in_page.goto(LOGIN_URL, timeout=15000)
+                    _wait_for_page_ready(logged_in_page)
+                    status.update("ログイン", f"リダイレクト先: {logged_in_page.url[:100]}", 20)
+                except Exception as e:
+                    status.update("デバッグ", f"ダッシュボード遷移失敗: {e}")
             return logged_in_page
 
         # 30秒ごとにリマインド
