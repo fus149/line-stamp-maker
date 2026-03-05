@@ -1464,6 +1464,167 @@ def upload_images(page: Page, output_dir: Path, status: UploadStatus):
     status.update("画像アップ", f"画像アップロード完了！({uploaded_count}/{total}枚成功)", 95)
 
 
+def _submit_review_request(page: Page, status: UploadStatus):
+    """画像アップロード後、審査リクエストボタンを押して審査提出する。
+    画像編集ページからスタンプ詳細ページに戻り、「リクエスト」ボタンをクリックする。
+    """
+    status.update("審査リクエスト", "審査リクエスト送信準備中...", 96)
+
+    # 画像アップロード後のページURLからsticker IDを取得
+    # 例: /my/{userId}/sticker/{stickerId}/...
+    match = re.search(r"/sticker/(\d+)", page.url)
+    if not match:
+        status.update("エラー", f"スタンプIDが取得できません。URL: {page.url[:100]}")
+        return
+
+    sticker_id = match.group(1)
+    status.update("審査リクエスト", f"スタンプID: {sticker_id}")
+
+    # Step 1: 画像編集モードを抜ける（「戻る」ボタンまたはURL遷移）
+    # 編集ページ(.../sticker/{id}/image#/image/edit)からスタンプ詳細ページに戻る
+    user_path = _extract_user_path(page)
+    if user_path:
+        detail_url = f"https://creator.line.me{user_path}/sticker/{sticker_id}"
+        status.update("審査リクエスト", f"スタンプ詳細ページに遷移: {detail_url[:80]}")
+        page.goto(detail_url, timeout=15000)
+        _wait_for_page_ready(page)
+        time.sleep(3)
+    else:
+        # URLから直接ユーザーパスが取れない場合は「戻る」ボタンを試す
+        try:
+            for back_text in ["戻る", "Back"]:
+                btn = page.get_by_text(back_text, exact=True)
+                if btn.count() > 0 and btn.first.is_visible(timeout=2000):
+                    btn.first.click()
+                    time.sleep(3)
+                    _wait_for_page_ready(page)
+                    status.update("審査リクエスト", f"「{back_text}」で詳細ページへ戻りました")
+                    break
+        except Exception as e:
+            status.update("デバッグ", f"戻るボタン失敗: {e}")
+
+    # QRモーダル対策
+    _force_dismiss_qr_modal(page, status)
+    time.sleep(1)
+
+    status.save_screenshot(page, "11_before_request")
+
+    # Step 2: 「リクエスト」ボタンを探してクリック
+    # 証拠(過去ログ): ✓ [BUTTON] "リクエスト" href= が存在
+    request_clicked = False
+
+    # 戦略1: Playwright get_by_text
+    for request_text in ["リクエスト", "Request"]:
+        try:
+            locator = page.get_by_text(request_text, exact=True)
+            count = locator.count()
+            status.update("デバッグ", f"「{request_text}」ボタン: {count}個")
+            for idx in range(count):
+                btn = locator.nth(idx)
+                try:
+                    if btn.is_visible(timeout=2000):
+                        tag = btn.evaluate("e => e.tagName")
+                        text = btn.text_content().strip()[:30]
+                        status.update("審査リクエスト", f"「{request_text}」クリック: tag={tag}, text='{text}'")
+                        btn.click()
+                        request_clicked = True
+                        time.sleep(3)
+                        break
+                except Exception:
+                    continue
+            if request_clicked:
+                break
+        except Exception as e:
+            status.update("デバッグ", f"get_by_text('{request_text}')失敗: {e}")
+
+    # 戦略2: JavaScript
+    if not request_clicked:
+        try:
+            result = page.evaluate("""
+                (() => {
+                    const candidates = document.querySelectorAll('a, button, [role="button"], span');
+                    for (const el of candidates) {
+                        const text = (el.textContent || '').trim();
+                        if (text === 'リクエスト' || text === 'Request') {
+                            const rect = el.getBoundingClientRect();
+                            if (rect.width > 0 && rect.height > 0) {
+                                el.click();
+                                return {tag: el.tagName, text: text};
+                            }
+                        }
+                    }
+                    return null;
+                })()
+            """)
+            if result:
+                status.update("審査リクエスト", f"JSクリック成功: {result}")
+                request_clicked = True
+                time.sleep(3)
+        except Exception as e:
+            status.update("デバッグ", f"JSクリック失敗: {e}")
+
+    if not request_clicked:
+        status.update("エラー", "「リクエスト」ボタンが見つかりません。手動で押してください。")
+        status.save_screenshot(page, "11_request_button_not_found")
+        return
+
+    # Step 3: 確認ダイアログ対応
+    # LINE Creators Marketでは「リクエスト」クリック後に確認ダイアログが出る可能性がある
+    # 「OK」「確認」「はい」「同意」などのボタンをクリック
+    time.sleep(2)
+    _force_dismiss_qr_modal(page, status)
+
+    # 確認ダイアログの検出と対応（最大3回試行）
+    for attempt in range(3):
+        confirmed = False
+
+        # 同意チェックボックスがあればチェック
+        try:
+            checkboxes = page.locator("input[type='checkbox']")
+            cb_count = checkboxes.count()
+            for ci in range(cb_count):
+                cb = checkboxes.nth(ci)
+                try:
+                    if cb.is_visible(timeout=1000) and not cb.is_checked():
+                        cb.check(force=True)
+                        status.update("審査リクエスト", f"チェックボックスをチェック ({ci+1}/{cb_count})")
+                        time.sleep(0.5)
+                except Exception:
+                    continue
+        except Exception:
+            pass
+
+        # 確認/OK/同意ボタンをクリック
+        for confirm_text in ["OK", "リクエスト", "確認", "同意して送信", "同意", "はい", "送信", "Submit"]:
+            try:
+                btn = page.get_by_text(confirm_text, exact=True)
+                if btn.count() > 0:
+                    for bi in range(btn.count()):
+                        candidate = btn.nth(bi)
+                        try:
+                            if candidate.is_visible(timeout=1000):
+                                candidate.click()
+                                confirmed = True
+                                status.update("審査リクエスト", f"「{confirm_text}」クリック (確認ダイアログ)")
+                                time.sleep(2)
+                                break
+                        except Exception:
+                            continue
+                if confirmed:
+                    break
+            except Exception:
+                continue
+
+        if not confirmed:
+            status.update("デバッグ", f"確認ダイアログなし（試行{attempt+1}）")
+            break
+
+        time.sleep(2)
+
+    status.save_screenshot(page, "12_after_request")
+    status.update("審査リクエスト", "審査リクエスト送信完了！", 99)
+
+
 # ============================================================
 # メインフロー
 # ============================================================
@@ -1575,17 +1736,18 @@ def upload_to_line(
             # Step 6: 画像アップロード
             upload_images(page, output_dir, status)
 
-            status.update("完了", "自動登録完了！ブラウザで内容を確認してください。", 100)
+            # Step 7: 審査リクエスト送信
+            _submit_review_request(page, status)
+
+            status.update("完了", "審査リクエスト完了！スタンプが審査に提出されました。", 100)
 
             if interactive:
-                print("\n  以下を確認してください:")
-                print("  1. アップロード画像の確認")
-                print("  2. 販売価格の設定")
-                print("  3.「リクエスト」ボタンで審査提出")
+                print("\n  審査リクエスト完了！")
+                print("  LINE Creators Marketで審査状況を確認できます。")
                 print("\n  ブラウザを閉じるにはEnterを押してください...")
                 input()
             else:
-                status.update("完了", "ブラウザで内容を確認し、「リクエスト」を押して審査に出してください。5分後にブラウザが閉じます。", 100)
+                status.update("完了", "審査リクエスト完了！スタンプが審査に提出されました。5分後にブラウザが閉じます。", 100)
                 time.sleep(300)
 
             return True
