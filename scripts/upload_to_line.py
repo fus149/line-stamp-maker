@@ -824,13 +824,28 @@ def navigate_to_new_sticker(page: Page, status: UploadStatus) -> bool:
     """スタンプ新規作成ページに遷移する。"""
     status.update("ページ遷移", f"新規登録ページに移動中... 現在URL: {page.url[:100]}", 25)
 
-    # ダッシュボードにいない場合は移動
+    # まず直接URLで遷移を試みる（モーダル回避）
+    try:
+        page.goto("https://creator.line.me/my/sticker/new/",
+                   wait_until="domcontentloaded", timeout=30000)
+        time.sleep(3)
+        _wait_for_page_ready(page)
+        if "/my/" in page.url or "/create" in page.url:
+            _dismiss_all_modals(page, status)
+            status.save_screenshot(page, "03_direct_nav")
+            status.update("ページ遷移", f"直接遷移成功: {page.url}", 27)
+            # 「新規登録」クリックの処理をスキップしてスタンプタイプ選択へ
+            if "/create" in page.url or "/new" in page.url:
+                return True
+    except Exception as e:
+        status.update("デバッグ", f"直接遷移失敗、従来方法にフォールバック: {e}")
+
+    # フォールバック: ダッシュボード経由
     if not _ensure_on_dashboard(page, status):
         status.update("エラー", f"ダッシュボードに到達できませんでした。URL: {page.url[:100]}")
         status.save_screenshot(page, "03_dashboard_fail")
         return False
 
-    # モーダルを確実に閉じる（新しいシンプルな実装）
     _wait_for_page_ready(page)
     time.sleep(2)
     _dismiss_all_modals(page, status)
@@ -1804,27 +1819,38 @@ def upload_to_line(
                 return False
             page = logged_in_page
 
-            # ログイン完了 → モーダル処理（ブラウザは表示したまま）
-            status.update("自動処理中", "ログイン完了！モーダルを閉じています...", 22)
-
-            # Step 2: ダッシュボード表示後の全モーダルを確実に閉じる
-            time.sleep(5)  # モーダルは遅延表示されるため十分待つ
-            _dismiss_all_modals(page, status)
+            # ログイン完了 → ダッシュボードのモーダルを回避するため直接URL遷移
+            status.update("自動処理中", "ログイン完了！スタンプ作成ページに移動中...", 22)
 
             # モーダル処理完了後にブラウザを裏に移動
             _hide_browser(page, status)
             status.update("自動処理中", "スタンプを自動登録しています。このページはそのままでお待ちください...", 25)
 
-            # Step 3: スタンプ作成ページへ遷移（最大3回リトライ）
+            # Step 2: スタンプ作成ページへ直接URL遷移（モーダル回避）
             sticker_page_reached = False
+            STICKER_NEW_URL = "https://creator.line.me/my/sticker/new/"
             for nav_attempt in range(3):
-                if navigate_to_new_sticker(page, status):
-                    sticker_page_reached = True
-                    break
-                status.update("ページ遷移", f"リトライ {nav_attempt + 1}/3: ダッシュボードに戻ります...", 25)
-                if _ensure_on_dashboard(page, status):
-                    time.sleep(2)
-                    _dismiss_all_modals(page, status)
+                try:
+                    page.goto(STICKER_NEW_URL, wait_until="domcontentloaded", timeout=30000)
+                    time.sleep(3)
+                    _wait_for_page_ready(page)
+                    # ログインが切れていないか確認
+                    if "/my/" in page.url or "/create" in page.url:
+                        # 作成ページ到達後もモーダルが出る場合があるので処理
+                        _dismiss_all_modals(page, status)
+                        sticker_page_reached = True
+                        status.update("ページ遷移", f"スタンプ作成ページに到達: {page.url}", 30)
+                        break
+                except Exception as e:
+                    status.update("デバッグ", f"直接遷移失敗 ({nav_attempt+1}/3): {e}")
+                # フォールバック: 従来の方法
+                status.update("ページ遷移", f"リトライ {nav_attempt + 1}/3...", 25)
+                try:
+                    if navigate_to_new_sticker(page, status):
+                        sticker_page_reached = True
+                        break
+                except Exception:
+                    pass
 
             if not sticker_page_reached:
                 status.update("エラー", "スタンプ作成ページに到達できませんでした。")
