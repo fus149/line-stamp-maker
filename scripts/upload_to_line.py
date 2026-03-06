@@ -824,21 +824,28 @@ def navigate_to_new_sticker(page: Page, status: UploadStatus) -> bool:
     """スタンプ新規作成ページに遷移する。"""
     status.update("ページ遷移", f"新規登録ページに移動中... 現在URL: {page.url[:100]}", 25)
 
-    # まず直接URLで遷移を試みる（モーダル回避）
+    # ダッシュボードにいる場合、「新規登録」のhrefを取得して直接遷移
     try:
-        page.goto("https://creator.line.me/my/sticker/new/",
-                   wait_until="domcontentloaded", timeout=30000)
-        time.sleep(3)
-        _wait_for_page_ready(page)
-        if "/my/" in page.url or "/create" in page.url:
-            _dismiss_all_modals(page, status)
-            status.save_screenshot(page, "03_direct_nav")
-            status.update("ページ遷移", f"直接遷移成功: {page.url}", 27)
-            # 「新規登録」クリックの処理をスキップしてスタンプタイプ選択へ
-            if "/create" in page.url or "/new" in page.url:
+        create_href = page.evaluate("""
+            (() => {
+                const links = document.querySelectorAll('a[href]');
+                for (const el of links) {
+                    const text = (el.textContent || '').trim();
+                    if (text.includes('新規登録')) return el.href;
+                }
+                return null;
+            })()
+        """)
+        if create_href:
+            page.goto(create_href, wait_until="domcontentloaded", timeout=30000)
+            time.sleep(3)
+            _wait_for_page_ready(page)
+            if "/create" in page.url:
+                status.save_screenshot(page, "03_direct_nav")
+                status.update("ページ遷移", f"直接遷移成功: {page.url}", 27)
                 return True
     except Exception as e:
-        status.update("デバッグ", f"直接遷移失敗、従来方法にフォールバック: {e}")
+        status.update("デバッグ", f"href直接遷移失敗: {e}")
 
     # フォールバック: ダッシュボード経由
     if not _ensure_on_dashboard(page, status):
@@ -1873,28 +1880,50 @@ def upload_to_line(
                 return False
             page = logged_in_page
 
-            # ログイン完了
-            status.update("自動処理中", "ログイン完了！スタンプ作成ページに移動中...", 22)
+            # ログイン完了 → ダッシュボードで「新規登録」のhrefを取得
+            status.update("自動処理中", "ログイン完了！新規登録ページを探しています...", 22)
+
+            # ダッシュボードから「新規登録」リンクのhrefを取得して直接遷移
+            # URLは /my/{userId}/create の形式（ユーザーIDが入る）
+            create_url = None
+            try:
+                create_url = page.evaluate("""
+                    (() => {
+                        const links = document.querySelectorAll('a[href]');
+                        for (const el of links) {
+                            const text = (el.textContent || '').trim();
+                            if (text.includes('新規登録')) {
+                                return el.href;
+                            }
+                        }
+                        return null;
+                    })()
+                """)
+                if create_url:
+                    status.update("自動処理中", f"新規登録URL取得: {create_url}", 23)
+            except Exception as e:
+                status.update("デバッグ", f"新規登録URL取得失敗: {e}")
 
             # ブラウザを裏に移動
             _hide_browser(page, status)
             status.update("自動処理中", "スタンプを自動登録しています。このページはそのままでお待ちください...", 25)
 
-            # Step 2: スタンプ作成ページへ直接URL遷移
+            # Step 2: スタンプ作成ページへ遷移
             sticker_page_reached = False
-            STICKER_NEW_URL = "https://creator.line.me/my/sticker/new/"
             for nav_attempt in range(3):
-                try:
-                    page.goto(STICKER_NEW_URL, wait_until="domcontentloaded", timeout=30000)
-                    time.sleep(3)
-                    _wait_for_page_ready(page)
-                    if "/my/" in page.url or "/create" in page.url:
-                        sticker_page_reached = True
-                        status.update("ページ遷移", f"スタンプ作成ページに到達: {page.url}", 30)
-                        break
-                except Exception as e:
-                    status.update("デバッグ", f"直接遷移失敗 ({nav_attempt+1}/3): {e}")
-                # フォールバック: 従来の方法
+                # 方法A: ダッシュボードから取得したURLで直接遷移
+                if create_url:
+                    try:
+                        page.goto(create_url, wait_until="domcontentloaded", timeout=30000)
+                        time.sleep(3)
+                        _wait_for_page_ready(page)
+                        if "/create" in page.url:
+                            sticker_page_reached = True
+                            status.update("ページ遷移", f"新規登録ページに到達: {page.url}", 30)
+                            break
+                    except Exception as e:
+                        status.update("デバッグ", f"直接遷移失敗 ({nav_attempt+1}/3): {e}")
+                # 方法B: navigate_to_new_stickerで「新規登録」ボタンクリック
                 status.update("ページ遷移", f"リトライ {nav_attempt + 1}/3...", 25)
                 try:
                     if navigate_to_new_sticker(page, status):
