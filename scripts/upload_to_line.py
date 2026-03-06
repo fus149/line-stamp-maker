@@ -279,118 +279,190 @@ def wait_for_login(page: Page, status: UploadStatus, timeout: int = 180) -> Opti
 # ダッシュボード操作
 # ============================================================
 
-def _dismiss_all_modals(page: Page, status: UploadStatus, max_attempts: int = 5):
+def _dismiss_all_modals(page: Page, status: UploadStatus, max_attempts: int = 8):
     """ダッシュボード上の全モーダルを確実に閉じる。
 
-    シンプルなアプローチ:
-    1. JavaScriptで「今後表示しない」チェックボックスをチェック
-    2. JavaScriptで「閉じる」ボタンをクリック
-    3. モーダルがなくなるまで繰り返す
+    戦略（優先順で全て試す）:
+    1. 「閉じる」ボタンをtextContent（子要素含む）で探してクリック
+    2. Escapeキー送信
+    3. オーバーレイ/バックドロップをクリック
+    4. DOM強制削除
     """
     for attempt in range(max_attempts):
-        time.sleep(1)
+        time.sleep(1.5)
 
-        # JavaScriptで直接モーダルを処理（is_visible不要、座標不要）
-        result = None
+        # まずモーダルが存在するか確認
         try:
-            result = page.evaluate("""
+            modal_info = page.evaluate("""
                 (() => {
-                    // Step 1: 「今後、この画面を表示しない」チェックボックスをチェック
-                    const checkboxes = document.querySelectorAll('input[type="checkbox"]');
-                    for (const cb of checkboxes) {
-                        if (!cb.checked) {
-                            // チェックボックスの近くに「表示しない」テキストがあるか確認
-                            const parent = cb.closest('label') || cb.parentElement;
-                            const parentText = parent ? parent.textContent : '';
-                            if (parentText.includes('表示しない') || parentText.includes('今後')) {
-                                cb.checked = true;
-                                cb.dispatchEvent(new Event('change', {bubbles: true}));
-                            } else {
-                                // モーダル内のチェックボックスは全てチェック
-                                const modal = cb.closest('[role="dialog"], .MdPOP01Modal, [class*="modal"], [class*="Modal"]');
-                                if (modal) {
-                                    cb.checked = true;
-                                    cb.dispatchEvent(new Event('change', {bubbles: true}));
-                                }
+                    const selectors = [
+                        '[role="dialog"]',
+                        '.MdPOP01Modal',
+                        '[class*="modal" i]',
+                        '[class*="Modal"]',
+                        '[class*="popup" i]',
+                        '[class*="Popup"]',
+                        '.ExBackdrop',
+                    ];
+                    for (const sel of selectors) {
+                        const els = document.querySelectorAll(sel);
+                        for (const el of els) {
+                            const rect = el.getBoundingClientRect();
+                            if (rect.width > 100 && rect.height > 100) {
+                                return {found: true, selector: sel, className: el.className?.substring?.(0, 100) || ''};
                             }
                         }
                     }
-
-                    // Step 2: 「閉じる」ボタンを探してクリック
-                    // 最も確実: 可視でhrefなしの「閉じる」テキスト要素
-                    const candidates = document.querySelectorAll('a, button, [role="button"], span, div');
-                    for (const el of Array.from(candidates).reverse()) {
-                        const rect = el.getBoundingClientRect();
-                        if (rect.width === 0 || rect.height === 0) continue;
-
-                        // 直接テキストノードのみ取得
-                        let directText = '';
-                        for (const node of el.childNodes) {
-                            if (node.nodeType === 3) directText += node.textContent;
-                        }
-                        directText = directText.trim();
-
-                        if (directText === '閉じる' || directText === 'Close') {
-                            // hrefがあるリンクはナビゲーションを起こすので除外
-                            if (el.tagName === 'A' && el.getAttribute('href') &&
-                                el.getAttribute('href') !== '#' &&
-                                el.getAttribute('href') !== 'javascript:void(0)') {
-                                continue;
-                            }
-                            el.click();
-                            return {closed: true, tag: el.tagName, text: directText};
-                        }
+                    // bodyのoverflowが隠されている場合もモーダルが残っている可能性
+                    const bodyStyle = window.getComputedStyle(document.body);
+                    if (bodyStyle.overflow === 'hidden') {
+                        return {found: true, selector: 'body-overflow-hidden', className: ''};
                     }
-
-                    // Step 3: Escapeキーでモーダルを閉じる試行
-                    // （JavaScript内ではキー送信できないので、閉じるボタンなしを報告）
-                    return {closed: false};
+                    return {found: false};
                 })()
             """)
         except Exception as e:
-            status.update("デバッグ", f"モーダル処理エラー: {e}")
+            status.update("デバッグ", f"モーダル確認エラー: {e}")
+            continue
 
-        if result and result.get("closed"):
-            status.update("自動処理中", f"モーダルを閉じました（{attempt + 1}回目）", 23)
-            time.sleep(1.5)  # 閉じるアニメーション待ち
-            continue  # 次のモーダルがあるかチェック
-        else:
-            # Escapeキーも試す
-            try:
-                page.keyboard.press("Escape")
-                time.sleep(1)
-            except Exception:
-                pass
-
-            # モーダルがもうないか最終確認
-            try:
-                has_modal = page.evaluate("""
-                    (() => {
-                        const dialogs = document.querySelectorAll('[role="dialog"], .MdPOP01Modal');
-                        for (const d of dialogs) {
-                            const rect = d.getBoundingClientRect();
-                            if (rect.width > 0 && rect.height > 0) return true;
-                        }
-                        return false;
-                    })()
-                """)
-                if not has_modal:
-                    status.update("自動処理中", "✅ モーダル処理完了", 24)
-                    return
-                # モーダルはあるが閉じるボタンがない → 強制削除
-                page.evaluate("""
-                    (() => {
-                        const dialogs = document.querySelectorAll('[role="dialog"], .MdPOP01Modal');
-                        for (const d of dialogs) { d.remove(); }
-                        const backdrops = document.querySelectorAll('.ExBackdrop, [class*="backdrop"], [class*="overlay"]');
-                        for (const b of backdrops) { b.remove(); }
-                    })()
-                """)
-                status.update("自動処理中", "モーダルを強制削除しました", 24)
-                time.sleep(1)
-            except Exception:
-                pass
+        if not modal_info or not modal_info.get("found"):
+            status.update("自動処理中", "✅ モーダル処理完了", 24)
             return
+
+        status.update("デバッグ", f"モーダル検出 ({attempt+1}回目): {modal_info.get('selector')} / {modal_info.get('className', '')[:50]}")
+
+        # === 戦略1: チェックボックス → 閉じるボタン（textContent全体で検索）===
+        try:
+            result = page.evaluate("""
+                (() => {
+                    // 「今後表示しない」チェックボックスを全てチェック
+                    const checkboxes = document.querySelectorAll('input[type="checkbox"]');
+                    let checked = 0;
+                    for (const cb of checkboxes) {
+                        if (!cb.checked) {
+                            const ctx = (cb.closest('label') || cb.parentElement);
+                            const txt = ctx ? ctx.textContent : '';
+                            if (txt.includes('表示しない') || txt.includes('今後')) {
+                                cb.checked = true;
+                                cb.dispatchEvent(new Event('change', {bubbles: true}));
+                                cb.dispatchEvent(new Event('click', {bubbles: true}));
+                                checked++;
+                            }
+                        }
+                    }
+
+                    // 「閉じる」「Close」「OK」ボタンを探す（textContent全体で検索）
+                    const closeTexts = ['閉じる', 'Close', 'OK', 'はい', '確認'];
+                    const allClickable = document.querySelectorAll('a, button, [role="button"], input[type="button"], input[type="submit"]');
+
+                    for (const target of closeTexts) {
+                        for (const el of Array.from(allClickable).reverse()) {
+                            const rect = el.getBoundingClientRect();
+                            if (rect.width < 10 || rect.height < 10) continue;
+                            const text = (el.textContent || el.value || '').trim();
+                            if (text === target || (text.length < 20 && text.includes(target))) {
+                                // ナビゲーションリンクは除外
+                                if (el.tagName === 'A') {
+                                    const href = el.getAttribute('href') || '';
+                                    if (href && href !== '#' && !href.startsWith('javascript:')) continue;
+                                }
+                                el.click();
+                                return {closed: true, method: 'click', text: text, checked: checked};
+                            }
+                        }
+                    }
+                    return {closed: false, checked: checked};
+                })()
+            """)
+
+            if result and result.get("closed"):
+                status.update("自動処理中", f"モーダルを閉じました: 「{result.get('text')}」クリック ({attempt+1}回目)", 23)
+                time.sleep(2)
+                continue
+        except Exception as e:
+            status.update("デバッグ", f"戦略1エラー: {e}")
+
+        # === 戦略2: Escapeキー ===
+        try:
+            page.keyboard.press("Escape")
+            time.sleep(1.5)
+            # 閉じたか確認
+            still_there = page.evaluate("""
+                (() => {
+                    const sels = ['[role="dialog"]', '.MdPOP01Modal', '[class*="modal" i]'];
+                    for (const s of sels) {
+                        for (const el of document.querySelectorAll(s)) {
+                            const r = el.getBoundingClientRect();
+                            if (r.width > 100 && r.height > 100) return true;
+                        }
+                    }
+                    return false;
+                })()
+            """)
+            if not still_there:
+                status.update("自動処理中", f"Escapeでモーダルを閉じました ({attempt+1}回目)", 23)
+                continue
+        except Exception:
+            pass
+
+        # === 戦略3: バックドロップ/オーバーレイをクリック ===
+        try:
+            page.evaluate("""
+                (() => {
+                    const backdrops = document.querySelectorAll('.ExBackdrop, [class*="backdrop" i], [class*="overlay" i], [class*="mask" i]');
+                    for (const b of backdrops) {
+                        const r = b.getBoundingClientRect();
+                        if (r.width > 100 && r.height > 100) {
+                            b.click();
+                            return;
+                        }
+                    }
+                })()
+            """)
+            time.sleep(1)
+        except Exception:
+            pass
+
+        # === 戦略4 (3回目以降): DOM強制削除 ===
+        if attempt >= 2:
+            try:
+                removed = page.evaluate("""
+                    (() => {
+                        let count = 0;
+                        // モーダル要素を削除
+                        const sels = ['[role="dialog"]', '.MdPOP01Modal', '[class*="modal" i]', '[class*="Modal"]', '[class*="popup" i]', '[class*="Popup"]'];
+                        for (const s of sels) {
+                            for (const el of document.querySelectorAll(s)) {
+                                const r = el.getBoundingClientRect();
+                                if (r.width > 100 && r.height > 100) {
+                                    el.remove();
+                                    count++;
+                                }
+                            }
+                        }
+                        // バックドロップ・オーバーレイ削除
+                        const bgSels = ['.ExBackdrop', '[class*="backdrop" i]', '[class*="overlay" i]', '[class*="mask" i]'];
+                        for (const s of bgSels) {
+                            for (const el of document.querySelectorAll(s)) {
+                                const r = el.getBoundingClientRect();
+                                if (r.width > 100 && r.height > 100) {
+                                    el.remove();
+                                    count++;
+                                }
+                            }
+                        }
+                        // bodyのoverflow修復
+                        document.body.style.overflow = '';
+                        document.documentElement.style.overflow = '';
+                        return count;
+                    })()
+                """)
+                if removed > 0:
+                    status.update("自動処理中", f"モーダルを強制削除しました ({removed}要素)", 24)
+                    time.sleep(1)
+                    continue
+            except Exception as e:
+                status.update("デバッグ", f"強制削除エラー: {e}")
 
     status.update("デバッグ", f"モーダル処理: {max_attempts}回試行完了")
 
@@ -1767,7 +1839,7 @@ def upload_to_line(
             status.update("自動処理中", "ログイン完了！モーダルを閉じています...", 22)
 
             # Step 2: ダッシュボード表示後の全モーダルを確実に閉じる
-            time.sleep(3)  # ダッシュボード + モーダル表示完了を待つ
+            time.sleep(5)  # モーダルは遅延表示されるため十分待つ
             _dismiss_all_modals(page, status)
 
             # モーダル処理完了後にブラウザを裏に移動
