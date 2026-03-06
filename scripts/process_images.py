@@ -31,12 +31,14 @@ MAIN_IMAGE_SIZE = (240, 240)  # メイン画像
 TAB_IMAGE_SIZE = (96, 74)     # タブ画像
 
 # 高速化: 入力画像の最大サイズ（長辺px）
-# IS-Netは1024x1024で推論するため、それ以上の入力は無駄に重い
-# alpha mattingも入力解像度で実行されるため、縮小で大幅に高速化
-MAX_INPUT_DIMENSION = 1500
+# IS-Netは内部で1024x1024にリサイズするため、入力はそれ以下で十分
+# 最終出力370x320のスタンプには768pxで十分な品質
+MAX_INPUT_DIMENSION = 768
 
 # 並列処理ワーカー数
-PARALLEL_WORKERS = 4
+# rembgはCPU負荷が高いため、並列数は控えめにしてメモリを節約
+import multiprocessing
+PARALLEL_WORKERS = min(2, multiprocessing.cpu_count())
 
 # --- バンドルフォント ---
 FONTS_DIR = Path(__file__).resolve().parent.parent / "static" / "fonts"
@@ -143,17 +145,32 @@ def _get_bg_session():
     return _bg_session
 
 
+def _soften_edges(img: Image.Image, radius: int = 1) -> Image.Image:
+    """背景除去後のエッジを少しぼかして自然にする。
+
+    alpha mattingの代わりに軽量なエッジソフトニングで
+    切り抜きの硬さを軽減する。
+    """
+    from PIL import ImageFilter
+    if img.mode != "RGBA":
+        return img
+    # アルファチャンネルだけ軽くぼかす
+    r, g, b, a = img.split()
+    a = a.filter(ImageFilter.GaussianBlur(radius=radius))
+    return Image.merge("RGBA", (r, g, b, a))
+
+
 def remove_background(img: Image.Image) -> Image.Image:
-    """背景を除去し、毛並みを自然に保持する（IS-Net + alpha matting）。"""
+    """背景を除去する（IS-Net、alpha matting無効で高速化）。
+
+    alpha mattingは1枚あたり30-60秒かかるため無効化。
+    代わりにエッジソフトニングで切り抜きを自然に仕上げる。
+    最終出力370x320pxのスタンプでは品質差はほぼわからない。
+    """
     session = _get_bg_session()
-    result = remove(
-        img,
-        session=session,
-        alpha_matting=True,
-        alpha_matting_foreground_threshold=230,
-        alpha_matting_background_threshold=20,
-        alpha_matting_erode_size=8,
-    )
+    result = remove(img, session=session, alpha_matting=False)
+    # エッジをわずかにソフト化して切り抜きを自然に
+    result = _soften_edges(result, radius=1)
     return result
 
 

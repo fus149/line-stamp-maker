@@ -12,6 +12,9 @@ from pathlib import Path
 
 import io
 
+import pillow_heif
+from PIL import Image as PILImageModule
+
 from fastapi import FastAPI, File, Form, UploadFile
 from fastapi.responses import FileResponse, JSONResponse, Response
 from fastapi.staticfiles import StaticFiles
@@ -21,6 +24,9 @@ from starlette.requests import Request
 from scripts.process_images import process_all_images
 from scripts.make_preview import make_preview
 from scripts.zip_output import create_zip
+
+# HEIF/HEICサポートを起動時に一度だけ登録
+pillow_heif.register_heif_opener()
 
 app = FastAPI(title="LINEスタンプ自動でつくるくん")
 
@@ -51,18 +57,17 @@ async def get_templates():
 @app.post("/api/preview-image")
 async def preview_image(file: UploadFile = File(...)):
     """画像をJPEGサムネイルに変換して返す（HEIC対応）。"""
-    import pillow_heif
-    pillow_heif.register_heif_opener()
-    from PIL import Image
-
     content = await file.read()
     try:
-        img = Image.open(io.BytesIO(content))
-        img.thumbnail((200, 200))
+        img = PILImageModule.open(io.BytesIO(content))
+        # 高速リサイズ: draft()でデコード段階から縮小（JPEG向け）
+        if hasattr(img, 'draft') and img.format == 'JPEG':
+            img.draft('RGB', (150, 150))
+        img.thumbnail((150, 150), PILImageModule.LANCZOS)
         if img.mode in ("RGBA", "P"):
             img = img.convert("RGB")
         buf = io.BytesIO()
-        img.save(buf, format="JPEG", quality=75)
+        img.save(buf, format="JPEG", quality=60, optimize=False)
         buf.seek(0)
         return Response(content=buf.getvalue(), media_type="image/jpeg")
     except Exception:
@@ -76,14 +81,19 @@ async def upload_images(files: list[UploadFile] = File(...)):
     session_dir = SESSIONS_DIR / session_id / "input"
     session_dir.mkdir(parents=True, exist_ok=True)
 
-    saved = []
+    # 全ファイルを先にメモリに読み込み（I/Oパイプライン最適化）
+    file_data = []
     for i, file in enumerate(files):
+        content = await file.read()
         ext = Path(file.filename).suffix.lower() or ".jpg"
-        dest = session_dir / f"{i + 1:02d}{ext}"
-        with open(dest, "wb") as f:
-            content = await file.read()
-            f.write(content)
-        saved.append(file.filename)
+        file_data.append((f"{i + 1:02d}{ext}", content, file.filename))
+
+    # ディスクへの書き込みを一括実行
+    saved = []
+    for fname, content, original_name in file_data:
+        dest = session_dir / fname
+        dest.write_bytes(content)
+        saved.append(original_name)
 
     return {"session_id": session_id, "files": saved, "count": len(saved)}
 

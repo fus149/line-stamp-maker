@@ -125,7 +125,15 @@ function removeFile(index) {
 }
 
 async function createThumbnailUrl(file) {
-  // サーバー側でJPEGサムネイルに変換（HEIC/HEIF含む全形式対応）
+  // HEIC/HEIF以外はブラウザ側Canvasで高速サムネイル生成
+  if (!isHeic(file)) {
+    try {
+      return await createBrowserThumbnail(file);
+    } catch (e) {
+      console.warn("ブラウザサムネイル失敗、サーバーにフォールバック:", e);
+    }
+  }
+  // HEIC/HEIFまたはフォールバック: サーバー側でJPEG変換
   try {
     const formData = new FormData();
     formData.append("file", file);
@@ -137,8 +145,32 @@ async function createThumbnailUrl(file) {
   } catch (e) {
     console.warn("サーバー変換失敗:", e);
   }
-  // フォールバック: ブラウザで直接表示を試みる
   return URL.createObjectURL(file);
+}
+
+function createBrowserThumbnail(file) {
+  return new Promise((resolve, reject) => {
+    const url = URL.createObjectURL(file);
+    const img = new Image();
+    img.onload = () => {
+      const maxSize = 150;
+      let w = img.width, h = img.height;
+      if (w > h) { h = Math.round(h * maxSize / w); w = maxSize; }
+      else { w = Math.round(w * maxSize / h); h = maxSize; }
+      const canvas = document.createElement("canvas");
+      canvas.width = w;
+      canvas.height = h;
+      const ctx = canvas.getContext("2d");
+      ctx.drawImage(img, 0, 0, w, h);
+      URL.revokeObjectURL(url);
+      canvas.toBlob((blob) => {
+        if (blob) resolve(URL.createObjectURL(blob));
+        else reject(new Error("Canvas toBlob failed"));
+      }, "image/jpeg", 0.6);
+    };
+    img.onerror = () => { URL.revokeObjectURL(url); reject(new Error("Image load failed")); };
+    img.src = url;
+  });
 }
 
 function renderPreviewGrid() {
@@ -376,7 +408,6 @@ function showResult(data) {
     grid.appendChild(div);
   });
 
-  $("#btn-download").href = `/api/download/${state.sessionId}`;
 }
 
 function showError(message) {
@@ -1071,9 +1102,6 @@ async function saveEditedStamp() {
     if (thumb) {
       thumb.src = `/api/stamp/${state.sessionId}/${state.editingFilename}?t=${Date.now()}`;
     }
-
-    // ダウンロードリンクも更新
-    $("#btn-download").href = `/api/download/${state.sessionId}?t=${Date.now()}`;
 
     closeEditor();
   } catch (e) {

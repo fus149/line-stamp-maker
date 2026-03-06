@@ -220,106 +220,180 @@ def _find_dashboard_page(context: BrowserContext, status: UploadStatus) -> Optio
     return None
 
 
-def wait_for_login(page: Page, status: UploadStatus, timeout: int = 300) -> Optional[Page]:
-    """ユーザーがログインするまで待機。ログイン後のページを返す。失敗時はNone。"""
+def wait_for_login(page: Page, status: UploadStatus, timeout: int = 180) -> Optional[Page]:
+    """ユーザーがログインするまで待機。シンプル版。
+
+    1. LINE Creators Marketにアクセス
+    2. 既にログイン済みならそのまま進む
+    3. 未ログインならユーザーにログインを促して待つ
+    """
     context = page.context
 
-    # 新しいタブ/ポップアップを検知
-    context.on("page", lambda new_page: status.update(
-        "デバッグ", f"新しいタブ検出: {(new_page.url or '(loading)')[:80]}"
-    ))
-
-    # LINE OAuth ログインページにアクセス
+    # LINE Creators Marketにアクセス
     status.update("ログイン", "LINE Creators Marketにアクセス中...", 5)
     page.goto(LOGIN_URL, timeout=30000)
     _wait_for_page_ready(page)
-    page.bring_to_front()
 
-    status.save_screenshot(page, "01_login_page")
-
-    # 既にダッシュボードにリダイレクトされた（セッション有効）
-    if _is_on_dashboard(page):
-        status.update("ログイン", "ログイン済み（セッション有効）", 20)
+    # 既にログイン済み（ダッシュボードにリダイレクト）
+    if "/my/" in page.url:
+        status.update("ログイン", "✅ 前回のログインが有効です（自動ログイン）", 20)
         return page
 
-    # creator.line.me にいる場合（トップページ等）→ リダイレクトでダッシュボードに行けるか試す
+    # creator.line.me にいる場合（トップページ等）
     if _is_on_creator_site(page.url) and "/signup/" not in page.url:
         if _try_navigate_to_dashboard(page, status):
-            status.update("ログイン", "ログイン済み（ダッシュボードにリダイレクト成功）", 20)
+            status.update("ログイン", "✅ ログイン済み", 20)
             return page
 
-    # ログインページにいる → ユーザーにログインを促す
-    # ブラウザウィンドウにバナーを表示して目立たせる
-    try:
-        page.evaluate("""
-            (() => {
-                const banner = document.createElement('div');
-                banner.id = 'pw-login-banner';
-                banner.style.cssText = 'position:fixed;top:0;left:0;right:0;z-index:99999;' +
-                    'background:#e74c3c;color:white;padding:16px;text-align:center;' +
-                    'font-size:18px;font-weight:bold;box-shadow:0 2px 10px rgba(0,0,0,0.3);';
-                banner.textContent = '⚠️ このブラウザでLINEにログインしてください ⚠️';
-                document.body.prepend(banner);
-            })()
-        """)
-    except Exception:
-        pass
-
+    # 未ログイン → ブラウザを前面に出してユーザーにログインを促す
     page.bring_to_front()
-    status.update("ログイン", f"⚠️ 新しく開いたブラウザウィンドウでログインしてください（{timeout}秒以内）", 10)
+    status.update("ログイン", "🔓 開いたブラウザでLINEにログインしてください", 10)
 
-    last_urls: dict[int, str] = {}
+    # シンプルにポーリングで待機
     elapsed = 0
-    interval = 3
+    interval = 2
     while elapsed < timeout:
         time.sleep(interval)
         elapsed += interval
 
-        # 全ページのURL変化を監視
+        # 全ページをチェック
         for p in context.pages:
             try:
-                pid = id(p)
-                current_url = p.url
-                prev_url = last_urls.get(pid, "")
-                if current_url != prev_url:
-                    status.update("ログイン", f"URL変化: {current_url[:100]}", 10)
-                    last_urls[pid] = current_url
+                if "/my/" in p.url:
+                    _wait_for_page_ready(p)
+                    status.update("ログイン", "✅ ログイン完了！", 20)
+                    return p
             except Exception:
                 continue
 
-        # ダッシュボードに到達したページがあるか確認
-        dashboard_page = _find_dashboard_page(context, status)
-        if dashboard_page:
-            _wait_for_page_ready(dashboard_page)
-            status.update("ログイン", "ログイン完了！", 20)
-            status.save_screenshot(dashboard_page, "02_login_done")
-            return dashboard_page
-
-        # 30秒ごとにリマインド
-        if elapsed % 30 == 0 and elapsed < timeout:
+        # 30秒ごとにリマインド（控えめに）
+        if elapsed % 30 == 0:
             remaining = timeout - elapsed
-            status.update("ログイン", f"⚠️ ブラウザでログインしてください（残り{remaining}秒）", 10)
-            # ブラウザを前面に持ってくる
-            try:
-                page.bring_to_front()
-            except Exception:
-                pass
+            status.update("ログイン", f"🔓 ブラウザでログインしてください（残り{remaining}秒）", 10)
 
-    # タイムアウト
-    status.update("エラー", "タイムアウト: ログインが完了しませんでした。")
-    status.update("デバッグ", f"最終ページ数: {len(context.pages)}")
-    for i, p in enumerate(context.pages):
-        try:
-            status.update("デバッグ", f"  Page[{i}] URL: {p.url[:100]}")
-        except Exception:
-            pass
-    status.save_screenshot(page, "02_login_timeout")
+    status.update("エラー", "⏰ ログインがタイムアウトしました。もう一度お試しください。")
     return None
 
 
 # ============================================================
 # ダッシュボード操作
 # ============================================================
+
+def _dismiss_all_modals(page: Page, status: UploadStatus, max_attempts: int = 5):
+    """ダッシュボード上の全モーダルを確実に閉じる。
+
+    シンプルなアプローチ:
+    1. JavaScriptで「今後表示しない」チェックボックスをチェック
+    2. JavaScriptで「閉じる」ボタンをクリック
+    3. モーダルがなくなるまで繰り返す
+    """
+    for attempt in range(max_attempts):
+        time.sleep(1)
+
+        # JavaScriptで直接モーダルを処理（is_visible不要、座標不要）
+        result = None
+        try:
+            result = page.evaluate("""
+                (() => {
+                    // Step 1: 「今後、この画面を表示しない」チェックボックスをチェック
+                    const checkboxes = document.querySelectorAll('input[type="checkbox"]');
+                    for (const cb of checkboxes) {
+                        if (!cb.checked) {
+                            // チェックボックスの近くに「表示しない」テキストがあるか確認
+                            const parent = cb.closest('label') || cb.parentElement;
+                            const parentText = parent ? parent.textContent : '';
+                            if (parentText.includes('表示しない') || parentText.includes('今後')) {
+                                cb.checked = true;
+                                cb.dispatchEvent(new Event('change', {bubbles: true}));
+                            } else {
+                                // モーダル内のチェックボックスは全てチェック
+                                const modal = cb.closest('[role="dialog"], .MdPOP01Modal, [class*="modal"], [class*="Modal"]');
+                                if (modal) {
+                                    cb.checked = true;
+                                    cb.dispatchEvent(new Event('change', {bubbles: true}));
+                                }
+                            }
+                        }
+                    }
+
+                    // Step 2: 「閉じる」ボタンを探してクリック
+                    // 最も確実: 可視でhrefなしの「閉じる」テキスト要素
+                    const candidates = document.querySelectorAll('a, button, [role="button"], span, div');
+                    for (const el of Array.from(candidates).reverse()) {
+                        const rect = el.getBoundingClientRect();
+                        if (rect.width === 0 || rect.height === 0) continue;
+
+                        // 直接テキストノードのみ取得
+                        let directText = '';
+                        for (const node of el.childNodes) {
+                            if (node.nodeType === 3) directText += node.textContent;
+                        }
+                        directText = directText.trim();
+
+                        if (directText === '閉じる' || directText === 'Close') {
+                            // hrefがあるリンクはナビゲーションを起こすので除外
+                            if (el.tagName === 'A' && el.getAttribute('href') &&
+                                el.getAttribute('href') !== '#' &&
+                                el.getAttribute('href') !== 'javascript:void(0)') {
+                                continue;
+                            }
+                            el.click();
+                            return {closed: true, tag: el.tagName, text: directText};
+                        }
+                    }
+
+                    // Step 3: Escapeキーでモーダルを閉じる試行
+                    // （JavaScript内ではキー送信できないので、閉じるボタンなしを報告）
+                    return {closed: false};
+                })()
+            """)
+        except Exception as e:
+            status.update("デバッグ", f"モーダル処理エラー: {e}")
+
+        if result and result.get("closed"):
+            status.update("自動処理中", f"モーダルを閉じました（{attempt + 1}回目）", 23)
+            time.sleep(1.5)  # 閉じるアニメーション待ち
+            continue  # 次のモーダルがあるかチェック
+        else:
+            # Escapeキーも試す
+            try:
+                page.keyboard.press("Escape")
+                time.sleep(1)
+            except Exception:
+                pass
+
+            # モーダルがもうないか最終確認
+            try:
+                has_modal = page.evaluate("""
+                    (() => {
+                        const dialogs = document.querySelectorAll('[role="dialog"], .MdPOP01Modal');
+                        for (const d of dialogs) {
+                            const rect = d.getBoundingClientRect();
+                            if (rect.width > 0 && rect.height > 0) return true;
+                        }
+                        return false;
+                    })()
+                """)
+                if not has_modal:
+                    status.update("自動処理中", "✅ モーダル処理完了", 24)
+                    return
+                # モーダルはあるが閉じるボタンがない → 強制削除
+                page.evaluate("""
+                    (() => {
+                        const dialogs = document.querySelectorAll('[role="dialog"], .MdPOP01Modal');
+                        for (const d of dialogs) { d.remove(); }
+                        const backdrops = document.querySelectorAll('.ExBackdrop, [class*="backdrop"], [class*="overlay"]');
+                        for (const b of backdrops) { b.remove(); }
+                    })()
+                """)
+                status.update("自動処理中", "モーダルを強制削除しました", 24)
+                time.sleep(1)
+            except Exception:
+                pass
+            return
+
+    status.update("デバッグ", f"モーダル処理: {max_attempts}回試行完了")
+
 
 def _dismiss_modals(page: Page, status: UploadStatus):
     """ダッシュボード上のモーダルポップアップ（キャンペーン告知等）を閉じる。
@@ -715,41 +789,11 @@ def navigate_to_new_sticker(page: Page, status: UploadStatus) -> bool:
         status.save_screenshot(page, "03_dashboard_fail")
         return False
 
-    # モーダルを閉じる（最大5回試行、閉じたことを確認するまで繰り返す）
+    # モーダルを確実に閉じる（新しいシンプルな実装）
     _wait_for_page_ready(page)
-    time.sleep(2)  # モーダル表示完了を待つ
-
-    for attempt in range(5):
-        # モーダルが存在するか確認（可視の「閉じる」ボタンのみカウント）
-        # 証拠(session 8a2f7dad-2回目): 不可視の「閉じる」(rect:0,0,0,0)で無限ループ
-        modal_exists = False
-        try:
-            close_locator = page.get_by_text("閉じる", exact=True)
-            close_count = close_locator.count()
-            # 可視のもののみカウント
-            visible_count = 0
-            for ci in range(close_count):
-                try:
-                    if close_locator.nth(ci).is_visible(timeout=500):
-                        visible_count += 1
-                except Exception:
-                    pass
-            modal_exists = visible_count > 0
-            if close_count > 0 and visible_count == 0:
-                status.update("デバッグ", f"「閉じる」{close_count}個あるが全て不可視 → スキップ")
-        except Exception:
-            pass
-
-        if not modal_exists:
-            status.update("デバッグ", f"モーダルなし（試行{attempt + 1}回目）")
-            break
-
-        status.update("デバッグ", f"モーダル検出、閉じ試行 {attempt + 1}/5")
-        _dismiss_modals(page, status)
-        time.sleep(2)  # 閉じアニメーション完了を待つ
-
+    time.sleep(2)
+    _dismiss_all_modals(page, status)
     status.save_screenshot(page, "03_dashboard")
-    status.dump_page_info(page, "ダッシュボード")
 
     # ---- 「新規登録」ボタンをクリック ----
     status.update("ページ遷移", "「新規登録」ボタンを探しています...", 27)
@@ -765,7 +809,7 @@ def navigate_to_new_sticker(page: Page, status: UploadStatus) -> bool:
     if "存在しません" in page_text or "404" in page.title():
         status.update("ページ遷移", "404ページに到達。ダッシュボードに戻ります...", 27)
         if _ensure_on_dashboard(page, status):
-            _dismiss_modals(page, status)
+            _dismiss_all_modals(page, status)
             time.sleep(1)
         else:
             return False
@@ -1240,10 +1284,9 @@ def upload_images(page: Page, output_dir: Path, status: UploadStatus):
     total = len(stamp_files)
     status.update("画像アップ", f"スタンプ画像をアップロード中... ({total}枚)", 65)
 
-    # QRコードモーダルを強制削除（画像アップロードを妨害するため）
-    # 証拠(session b45b0b87): FnOaQrcodeモーダルが全クリックをブロック
+    # モーダルを全て閉じる（QRコードモーダル含む）
     _force_dismiss_qr_modal(page, status)
-    _dismiss_modals(page, status)
+    _dismiss_all_modals(page, status)
     time.sleep(1)
 
     # 「スタンプ画像」タブに切り替え
@@ -1683,13 +1726,24 @@ def upload_to_line(
     user_data_dir.mkdir(exist_ok=True)
 
     with sync_playwright() as p:
-        context = p.chromium.launch_persistent_context(
-            user_data_dir=str(user_data_dir),
-            headless=False,
-            locale="ja-JP",
-            no_viewport=True,
-            args=["--start-maximized"],
-        )
+        # システムのChromeを使用（ユーザーが慣れたブラウザ）
+        # channel="chrome"により、普段のChromeと同じ見た目で開く
+        # persistent_contextでログイン状態を保存（次回以降は自動ログイン）
+        launch_kwargs = {
+            "user_data_dir": str(user_data_dir),
+            "headless": False,
+            "locale": "ja-JP",
+            "no_viewport": True,
+            "args": ["--start-maximized"],
+        }
+        # システムChromeがあればそちらを使用（より馴染みのあるUI）
+        try:
+            context = p.chromium.launch_persistent_context(
+                channel="chrome", **launch_kwargs
+            )
+        except Exception:
+            # Chromeが無い場合はPlaywright Chromiumにフォールバック
+            context = p.chromium.launch_persistent_context(**launch_kwargs)
 
         # persistent context はデフォルトで空ページを1つ作る。
         # 不要な空ページを閉じてから新しいページを作る。
@@ -1709,45 +1763,32 @@ def upload_to_line(
                 return False
             page = logged_in_page
 
-            # ログイン完了 → ブラウザを最小化してバックグラウンド処理に移行
-            status.update("自動処理中", "ログイン完了！スタンプを自動登録しています。このページはそのままでお待ちください...", 22)
-            _hide_browser(page, status)
+            # ログイン完了 → モーダル処理（ブラウザは表示したまま）
+            status.update("自動処理中", "ログイン完了！モーダルを閉じています...", 22)
 
-            # Step 2: ダッシュボード表示後の初期モーダル閉じ
+            # Step 2: ダッシュボード表示後の全モーダルを確実に閉じる
             time.sleep(3)  # ダッシュボード + モーダル表示完了を待つ
-            status.save_screenshot(page, "02b_before_modal_dismiss")
-            _dismiss_modals(page, status)
-            time.sleep(2)
-            status.save_screenshot(page, "02c_after_modal_dismiss")
+            _dismiss_all_modals(page, status)
 
-            # Step 3: スタンプ作成ページへ遷移（最大2回リトライ）
+            # モーダル処理完了後にブラウザを裏に移動
+            _hide_browser(page, status)
+            status.update("自動処理中", "スタンプを自動登録しています。このページはそのままでお待ちください...", 25)
+
+            # Step 3: スタンプ作成ページへ遷移（最大3回リトライ）
             sticker_page_reached = False
-            for nav_attempt in range(2):
+            for nav_attempt in range(3):
                 if navigate_to_new_sticker(page, status):
                     sticker_page_reached = True
                     break
-                # リトライ前にダッシュボードに戻ってモーダルを確実に閉じる
-                status.update("ページ遷移", f"リトライ {nav_attempt + 1}/2: ダッシュボードに戻ります...", 25)
+                status.update("ページ遷移", f"リトライ {nav_attempt + 1}/3: ダッシュボードに戻ります...", 25)
                 if _ensure_on_dashboard(page, status):
                     time.sleep(2)
-                    _dismiss_modals(page, status)
-                    time.sleep(2)
+                    _dismiss_all_modals(page, status)
 
             if not sticker_page_reached:
-                status.update("警告", "自動遷移に失敗。手動で操作してください。")
-                if interactive:
-                    print("  手動でスタンプ作成ページに移動してください。")
-                    print("  移動したらEnterを押してください...")
-                    input()
-                else:
-                    status.update("警告", "30秒待機中... 手動でスタンプ作成ページに移動してください。")
-                    time.sleep(30)
-                    form_count = page.locator("input[type='text'], textarea, input[type='file']").count()
-                    if form_count == 0:
-                        status.update("エラー", "スタンプ作成ページに到達できませんでした。")
-                        status.save_screenshot(page, "99_final_error")
-                        status.dump_page_info(page, "最終状態")
-                        return False
+                status.update("エラー", "スタンプ作成ページに到達できませんでした。")
+                status.save_screenshot(page, "99_final_error")
+                return False
 
             # Step 4: スタンプ情報入力
             fill_sticker_info(page, title, description, status)
