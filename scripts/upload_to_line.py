@@ -1812,6 +1812,60 @@ def upload_to_line(
 
         page = context.new_page()
 
+        # ============================================================
+        # 全ページに対してモーダル自動非表示CSS/JSを注入
+        # これにより、どのページでもモーダルは表示されず操作をブロックしない
+        # add_init_script はページ遷移のたびに自動で再実行される
+        # ============================================================
+        context.add_init_script("""
+            (function() {
+                // CSS注入: モーダル・オーバーレイを全て非表示
+                const style = document.createElement('style');
+                style.id = '__auto_modal_hide__';
+                style.textContent = `
+                    [role="dialog"],
+                    .MdPOP01Modal,
+                    .ExBackdrop,
+                    [class*="backdrop" i],
+                    [class*="overlay" i]:not(#__never_match__) {
+                        display: none !important;
+                        visibility: hidden !important;
+                        opacity: 0 !important;
+                        pointer-events: none !important;
+                    }
+                    body {
+                        overflow: auto !important;
+                    }
+                `;
+                if (document.head) {
+                    document.head.appendChild(style);
+                } else {
+                    document.addEventListener('DOMContentLoaded', function() {
+                        document.head.appendChild(style);
+                    });
+                }
+
+                // MutationObserverでモーダルが後から追加されても即座に非表示
+                const observer = new MutationObserver(function(mutations) {
+                    // CSSが削除されていたら再挿入
+                    if (!document.getElementById('__auto_modal_hide__')) {
+                        document.head.appendChild(style.cloneNode(true));
+                    }
+                    // body overflow をロックされないように強制解除
+                    if (document.body && document.body.style.overflow === 'hidden') {
+                        document.body.style.overflow = 'auto';
+                    }
+                });
+                if (document.body) {
+                    observer.observe(document.body, { childList: true, subtree: true, attributes: true });
+                } else {
+                    document.addEventListener('DOMContentLoaded', function() {
+                        observer.observe(document.body, { childList: true, subtree: true, attributes: true });
+                    });
+                }
+            })();
+        """)
+
         try:
             # Step 1: ログイン
             logged_in_page = wait_for_login(page, status)
@@ -1819,14 +1873,14 @@ def upload_to_line(
                 return False
             page = logged_in_page
 
-            # ログイン完了 → ダッシュボードのモーダルを回避するため直接URL遷移
+            # ログイン完了
             status.update("自動処理中", "ログイン完了！スタンプ作成ページに移動中...", 22)
 
-            # モーダル処理完了後にブラウザを裏に移動
+            # ブラウザを裏に移動
             _hide_browser(page, status)
             status.update("自動処理中", "スタンプを自動登録しています。このページはそのままでお待ちください...", 25)
 
-            # Step 2: スタンプ作成ページへ直接URL遷移（モーダル回避）
+            # Step 2: スタンプ作成ページへ直接URL遷移
             sticker_page_reached = False
             STICKER_NEW_URL = "https://creator.line.me/my/sticker/new/"
             for nav_attempt in range(3):
@@ -1834,10 +1888,7 @@ def upload_to_line(
                     page.goto(STICKER_NEW_URL, wait_until="domcontentloaded", timeout=30000)
                     time.sleep(3)
                     _wait_for_page_ready(page)
-                    # ログインが切れていないか確認
                     if "/my/" in page.url or "/create" in page.url:
-                        # 作成ページ到達後もモーダルが出る場合があるので処理
-                        _dismiss_all_modals(page, status)
                         sticker_page_reached = True
                         status.update("ページ遷移", f"スタンプ作成ページに到達: {page.url}", 30)
                         break
