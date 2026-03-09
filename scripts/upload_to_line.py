@@ -1788,6 +1788,14 @@ def upload_to_line(
     user_data_dir = project_root / ".browser_data"
     user_data_dir.mkdir(exist_ok=True)
 
+    # 前回のブラウザが異常終了した場合のロックファイルを削除
+    singleton_lock = user_data_dir / "SingletonLock"
+    if singleton_lock.exists():
+        try:
+            singleton_lock.unlink()
+        except OSError:
+            pass
+
     with sync_playwright() as p:
         # システムのChromeを使用（ユーザーが慣れたブラウザ）
         # channel="chrome"により、普段のChromeと同じ見た目で開く
