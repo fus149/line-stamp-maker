@@ -296,13 +296,10 @@ def wait_for_login(page: Page, status: UploadStatus, timeout: int = 180) -> Opti
             for p in context.pages:
                 try:
                     url = p.url
-                    if "creator.line.me" in url and "/my/" not in url and "/signup/" not in url and "/auth" not in url:
-                        # creator.line.meだがダッシュボード以外 → ダッシュボードへ遷移
-                        p.goto("https://creator.line.me/my/", timeout=15000)
+                    if "creator.line.me" in url and "/my/" in url:
                         _wait_for_page_ready(p)
-                        if "/my/" in p.url:
-                            status.update("ログイン", "✅ ログイン完了！", 20)
-                            return p
+                        status.update("ログイン", "✅ ログイン完了！", 20)
+                        return p
                 except Exception:
                     continue
         except Exception:
