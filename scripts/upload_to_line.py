@@ -221,7 +221,7 @@ def _find_dashboard_page(context: BrowserContext, status: UploadStatus) -> Optio
 
 
 def wait_for_login(page: Page, status: UploadStatus, timeout: int = 180) -> Optional[Page]:
-    """ユーザーがログインするまで待機。シンプル版。
+    """ユーザーがログインするまで待機。
 
     1. LINE Creators Marketにアクセス
     2. 既にログイン済みならそのまま進む
@@ -229,15 +229,32 @@ def wait_for_login(page: Page, status: UploadStatus, timeout: int = 180) -> Opti
     """
     context = page.context
 
+    def _find_logged_in_page() -> Optional[Page]:
+        """全ページを確認してログイン済みのページを返す"""
+        for p in context.pages:
+            try:
+                url = p.url
+                if "/my/" in url:
+                    return p
+            except Exception:
+                continue
+        return None
+
     # LINE Creators Marketにアクセス
     status.update("ログイン", "LINE Creators Marketにアクセス中...", 5)
-    page.goto(LOGIN_URL, timeout=30000)
+    try:
+        page.goto(LOGIN_URL, timeout=30000)
+    except Exception as e:
+        status.update("デバッグ", f"LOGIN_URL遷移エラー: {e}")
+
     _wait_for_page_ready(page)
+    status.update("デバッグ", f"ログインURL遷移後: {page.url[:100]}")
 
     # 既にログイン済み（ダッシュボードにリダイレクト）
-    if "/my/" in page.url:
+    logged_in = _find_logged_in_page()
+    if logged_in:
         status.update("ログイン", "✅ 前回のログインが有効です（自動ログイン）", 20)
-        return page
+        return logged_in
 
     # creator.line.me にいる場合（トップページ等）
     if _is_on_creator_site(page.url) and "/signup/" not in page.url:
@@ -249,7 +266,7 @@ def wait_for_login(page: Page, status: UploadStatus, timeout: int = 180) -> Opti
     page.bring_to_front()
     status.update("ログイン", "🔓 開いたブラウザでLINEにログインしてください", 10)
 
-    # シンプルにポーリングで待機
+    # ポーリングで待機
     elapsed = 0
     interval = 2
     while elapsed < timeout:
@@ -257,19 +274,51 @@ def wait_for_login(page: Page, status: UploadStatus, timeout: int = 180) -> Opti
         elapsed += interval
 
         # 全ページをチェック
-        for p in context.pages:
-            try:
-                if "/my/" in p.url:
-                    _wait_for_page_ready(p)
-                    status.update("ログイン", "✅ ログイン完了！", 20)
-                    return p
-            except Exception:
-                continue
+        logged_in = _find_logged_in_page()
+        if logged_in:
+            _wait_for_page_ready(logged_in)
+            status.update("ログイン", "✅ ログイン完了！", 20)
+            return logged_in
 
-        # 30秒ごとにリマインド（控えめに）
-        if elapsed % 30 == 0:
+        # ログインでリダイレクトされた可能性（URL変化チェック）
+        try:
+            current_url = page.url
+            if "creator.line.me" in current_url and "/signup/" not in current_url and "/auth" not in current_url:
+                # ログインページ以外のcreator.line.meにいる → ダッシュボードへ遷移を試みる
+                if _try_navigate_to_dashboard(page, status):
+                    status.update("ログイン", "✅ ログイン完了！", 20)
+                    return page
+        except Exception:
+            pass
+
+        # 新しいページが開かれた場合に対応（OAuthポップアップ閉じた後）
+        try:
+            for p in context.pages:
+                try:
+                    url = p.url
+                    if "creator.line.me" in url and "/my/" not in url and "/signup/" not in url and "/auth" not in url:
+                        # creator.line.meだがダッシュボード以外 → ダッシュボードへ遷移
+                        p.goto("https://creator.line.me/my/", timeout=15000)
+                        _wait_for_page_ready(p)
+                        if "/my/" in p.url:
+                            status.update("ログイン", "✅ ログイン完了！", 20)
+                            return p
+                except Exception:
+                    continue
+        except Exception:
+            pass
+
+        # 10秒ごとにデバッグ情報
+        if elapsed % 10 == 0:
+            urls = []
+            for p in context.pages:
+                try:
+                    urls.append(p.url[:60])
+                except Exception:
+                    urls.append("(error)")
             remaining = timeout - elapsed
             status.update("ログイン", f"🔓 ブラウザでログインしてください（残り{remaining}秒）", 10)
+            status.update("デバッグ", f"ページURL: {urls}")
 
     status.update("エラー", "⏰ ログインがタイムアウトしました。もう一度お試しください。")
     return None
