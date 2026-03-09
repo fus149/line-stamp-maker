@@ -267,30 +267,41 @@ def wait_for_login(page: Page, status: UploadStatus, timeout: int = 180) -> Opti
     page.bring_to_front()
     status.update("ログイン", "🔓 開いたブラウザでLINEにログインしてください", 10)
 
-    # ポーリングで待機（ページ遷移は一切行わず、URLの変化だけを監視する）
+    # ポーリングで待機
     elapsed = 0
     interval = 3
     while elapsed < timeout:
         time.sleep(interval)
         elapsed += interval
 
-        # 全ページのURLをチェック（goto等のページ遷移は絶対に行わない）
+        # 全ページのURLをチェック
         try:
             for p in context.pages:
                 try:
                     url = p.url
+
                     # ダッシュボード到達 = ログイン成功
                     if "/my/" in url and "access.line.me" not in url:
                         _wait_for_page_ready(p)
                         status.update("ログイン", "✅ ログイン完了！", 20)
                         return p
+
+                    # creator.line.meにいるがダッシュボードではない場合
+                    # （ログイン後トップページにリダイレクトされるケース）
+                    # → ダッシュボードへ誘導（access.line.meログインページでは実行しない）
+                    if _is_on_creator_site(url) and "/my/" not in url and "/signup/" not in url:
+                        status.update("ログイン", "ログイン検出。ダッシュボードへ移動中...", 15)
+                        if _try_navigate_to_dashboard(p, status):
+                            status.update("ログイン", "✅ ログイン完了！", 20)
+                            return p
+
                 except Exception:
                     continue
         except Exception:
             pass
 
-        # 10秒ごとにステータス更新
-        if elapsed % 10 == 0:
+        # 30秒ごとにステータス更新
+        if elapsed % 30 == 0:
             remaining = timeout - elapsed
             status.update("ログイン", f"🔓 ブラウザでログインしてください（残り{remaining}秒）", 10)
 
