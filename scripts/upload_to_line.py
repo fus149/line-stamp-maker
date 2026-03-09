@@ -220,28 +220,33 @@ def _find_dashboard_page(context: BrowserContext, status: UploadStatus) -> Optio
     return None
 
 
-def wait_for_login(page: Page, status: UploadStatus, timeout: int = 180) -> Optional[Page]:
-    """ユーザーがログインするまで待機。
-
-    1. LINE Creators Marketにアクセス
-    2. 既にログイン済みならそのまま進む
-    3. 未ログインならユーザーにログインを促して待つ
-    """
+def wait_for_login(page: Page, status: UploadStatus, timeout: int = 300) -> Optional[Page]:
+    """ユーザーがログインするまで待機。ログイン済みのダッシュボードページを返す。"""
     context = page.context
 
-    def _find_logged_in_page() -> Optional[Page]:
-        """全ページを確認してログイン済み（ダッシュボード）のページを返す"""
+    def _check_all_pages_for_dashboard() -> Optional[Page]:
+        """全ページを確認してダッシュボードのページを返す"""
         for p in context.pages:
             try:
                 url = p.url
-                # /my/ がURLパス部分にある＋access.line.meではない（クエリパラメータの誤判定防止）
                 if "/my/" in url and "access.line.me" not in url:
                     return p
             except Exception:
                 continue
         return None
 
-    # LINE Creators Marketにアクセス
+    def _check_all_pages_for_creator_site() -> Optional[Page]:
+        """creator.line.meにいるページを返す（ログインページ除外）"""
+        for p in context.pages:
+            try:
+                url = p.url
+                if _is_on_creator_site(url) and "/signup/" not in url:
+                    return p
+            except Exception:
+                continue
+        return None
+
+    # === Step 1: LOGIN_URLにアクセス ===
     status.update("ログイン", "LINE Creators Marketにアクセス中...", 5)
     try:
         page.goto(LOGIN_URL, timeout=30000)
@@ -249,61 +254,63 @@ def wait_for_login(page: Page, status: UploadStatus, timeout: int = 180) -> Opti
         status.update("デバッグ", f"LOGIN_URL遷移エラー: {e}")
 
     _wait_for_page_ready(page)
-    status.update("デバッグ", f"ログインURL遷移後: {page.url[:100]}")
 
-    # 既にログイン済み（ダッシュボードにリダイレクト）
-    logged_in = _find_logged_in_page()
-    if logged_in:
+    current = page.url
+    status.update("デバッグ", f"遷移後URL: {current[:120]}")
+
+    # === Step 2: 現在のページ状態を判定 ===
+
+    # ケース1: 直接ダッシュボードにリダイレクトされた（ログイン済み）
+    dashboard = _check_all_pages_for_dashboard()
+    if dashboard:
         status.update("ログイン", "✅ 前回のログインが有効です（自動ログイン）", 20)
-        return logged_in
+        return dashboard
 
-    # creator.line.me にいる場合（トップページ等）
-    if _is_on_creator_site(page.url) and "/signup/" not in page.url:
-        if _try_navigate_to_dashboard(page, status):
+    # ケース2: creator.line.meにいるがダッシュボードではない → ダッシュボードへ誘導
+    creator = _check_all_pages_for_creator_site()
+    if creator:
+        status.update("ログイン", "creator.line.me検出。ダッシュボードへ誘導中...", 15)
+        if _try_navigate_to_dashboard(creator, status):
             status.update("ログイン", "✅ ログイン済み", 20)
-            return page
+            return creator
 
-    # 未ログイン → ブラウザを前面に出してユーザーにログインを促す
+    # ケース3: ログインページ → ユーザーの手動ログインを待つ
     page.bring_to_front()
     status.update("ログイン", "🔓 開いたブラウザでLINEにログインしてください", 10)
 
-    # ポーリングで待機
+    # === Step 3: ポーリングで待機 ===
     elapsed = 0
     interval = 3
     while elapsed < timeout:
         time.sleep(interval)
         elapsed += interval
 
-        # 全ページのURLをチェック
-        try:
-            for p in context.pages:
-                try:
-                    url = p.url
+        # ダッシュボードに到達したか？
+        dashboard = _check_all_pages_for_dashboard()
+        if dashboard:
+            _wait_for_page_ready(dashboard)
+            status.update("ログイン", "✅ ログイン完了！", 20)
+            return dashboard
 
-                    # ダッシュボード到達 = ログイン成功
-                    if "/my/" in url and "access.line.me" not in url:
-                        _wait_for_page_ready(p)
-                        status.update("ログイン", "✅ ログイン完了！", 20)
-                        return p
-
-                    # creator.line.meにいるがダッシュボードではない場合
-                    # （ログイン後トップページにリダイレクトされるケース）
-                    # → ダッシュボードへ誘導（access.line.meログインページでは実行しない）
-                    if _is_on_creator_site(url) and "/my/" not in url and "/signup/" not in url:
-                        status.update("ログイン", "ログイン検出。ダッシュボードへ移動中...", 15)
-                        if _try_navigate_to_dashboard(p, status):
-                            status.update("ログイン", "✅ ログイン完了！", 20)
-                            return p
-
-                except Exception:
-                    continue
-        except Exception:
-            pass
+        # creator.line.meにいる（ログイン後トップページにリダイレクト）→ ダッシュボードへ
+        creator = _check_all_pages_for_creator_site()
+        if creator:
+            status.update("ログイン", "ログイン検出。ダッシュボードへ移動中...", 15)
+            if _try_navigate_to_dashboard(creator, status):
+                status.update("ログイン", "✅ ログイン完了！", 20)
+                return creator
 
         # 30秒ごとにステータス更新
         if elapsed % 30 == 0:
             remaining = timeout - elapsed
+            page_urls = []
+            for p in context.pages:
+                try:
+                    page_urls.append(p.url[:80])
+                except Exception:
+                    page_urls.append("(error)")
             status.update("ログイン", f"🔓 ブラウザでログインしてください（残り{remaining}秒）", 10)
+            status.update("デバッグ", f"ページ一覧: {page_urls}")
 
     status.update("エラー", "⏰ ログインがタイムアウトしました。もう一度お試しください。")
     return None
@@ -1883,8 +1890,11 @@ def upload_to_line(
 
     _cleanup_browser_locks(user_data_dir)
 
+    status.update("開始", "ブラウザを起動中...", 2)
+
     with sync_playwright() as p:
         context = _launch_browser(p, user_data_dir, status)
+        status.update("開始", "ブラウザ起動成功", 3)
 
         # persistent context はデフォルトで空ページを1つ作る。
         # 不要な空ページを閉じてから新しいページを作る。
@@ -1896,6 +1906,7 @@ def upload_to_line(
                     pass
 
         page = context.new_page()
+        status.update("開始", "新しいページ作成完了", 4)
 
         # ============================================================
         # 全ページに対してモーダル自動非表示CSS/JSを注入
