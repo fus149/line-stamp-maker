@@ -35,6 +35,9 @@ class UploadStatus:
     def update(self, step: str, message: str, progress: int = 0):
         self.logs.append(f"[{step}] {message}")
         print(f"  [{step}] {message}")
+        # 「デバッグ」「警告」ステップはターミナルのみ表示（お客様には見せない）
+        if step in ("デバッグ", "警告"):
+            return
         if self.status_file:
             data = {
                 "step": step,
@@ -88,25 +91,20 @@ class UploadStatus:
 # ============================================================
 
 def _hide_browser(page: Page, status: UploadStatus):
-    """Chromiumブラウザウィンドウを画面外に移動して隠す。
-    ログイン完了後、ユーザーにはWebアプリの待機画面だけ見せるために使用。
-    CDP (Chrome DevTools Protocol) でウィンドウを画面外へ移動する。
+    """Chromiumブラウザウィンドウを完全に隠す（Dock最小化）。
+    Playwrightの操作はCDP経由のため、最小化中でも動作する。
+    click(force=True), fill(), set_input_files(), evaluate() は全てCDPベース。
     """
     try:
         cdp = page.context.new_cdp_session(page)
         window = cdp.send("Browser.getWindowForTarget")
         window_id = window["windowId"]
-        # まず normal 状態にしてから画面外へ移動（最小化状態だと bounds 変更不可）
         cdp.send("Browser.setWindowBounds", {
             "windowId": window_id,
-            "bounds": {"windowState": "normal"}
-        })
-        cdp.send("Browser.setWindowBounds", {
-            "windowId": window_id,
-            "bounds": {"left": -9999, "top": -9999, "width": 800, "height": 600}
+            "bounds": {"windowState": "minimized"}
         })
         cdp.detach()
-        status.update("デバッグ", "ブラウザを裏に移動しました")
+        status.update("デバッグ", "ブラウザを最小化しました")
     except Exception as e:
         status.update("デバッグ", f"ブラウザ非表示失敗（動作に影響なし）: {e}")
 
@@ -131,7 +129,7 @@ def _is_on_dashboard(page: Page) -> bool:
     - /my/ を含むが、ダッシュボードではない
     - ダッシュボード = /my/{userId}/sticker/ (一覧ページ)
     """
-    url = page.url
+    url = _get_real_url(page)
     if "/my/" not in url:
         return False
     # スタンプ/絵文字/着せかえの個別ページは除外
@@ -155,14 +153,28 @@ def _is_on_creator_site(url: str) -> bool:
     return "creator.line.me" in url and "access.line.me" not in url
 
 
+def _get_real_url(page: Page) -> str:
+    """ページの実際のURLを取得する。
+    page.url はPlaywrightのキャッシュ値で、OAuth等のリダイレクト後に
+    古いURLを返すことがある。JavaScriptでブラウザ側の実URLを取得する。
+    """
+    try:
+        return page.evaluate("window.location.href")
+    except Exception:
+        try:
+            return page.url
+        except Exception:
+            return ""
+
+
 def _try_navigate_to_dashboard(page: Page, status: UploadStatus) -> bool:
     """/signup/line_auth に遷移し、ログイン済みならダッシュボードにリダイレクトされるか確認。
     ダッシュボードに到達できたらTrue。"""
     try:
         page.goto(LOGIN_URL, timeout=15000)
         _wait_for_page_ready(page)
-        new_url = page.url
-        status.update("ログイン", f"リダイレクト先: {new_url[:100]}", 15)
+        new_url = _get_real_url(page)
+        status.update("デバッグ", f"リダイレクト先: {new_url[:100]}")
         return "/my/" in new_url
     except Exception as e:
         status.update("デバッグ", f"リダイレクト試行失敗: {e}")
@@ -182,22 +194,22 @@ def _find_dashboard_page(context: BrowserContext, status: UploadStatus) -> Optio
 
     for p in all_pages:
         try:
-            url = p.url
+            url = _get_real_url(p)
             # ダッシュボードに直接いるページ（_is_on_dashboardで厳密判定）
             if _is_on_dashboard(p):
-                status.update("ログイン", f"ダッシュボード検出: {url[:100]}", 20)
+                status.update("デバッグ", f"ダッシュボード検出: {url[:100]}")
                 return p
             # /my/ 配下だがダッシュボードではないページ（スタンプ編集ページ等）
             # → creator.line.me にいるページとして記録（後でリダイレクト試行）
             if "/my/" in url:
-                status.update("ログイン", f"/my/配下検出（ダッシュボード以外）: {url[:100]}", 18)
+                status.update("デバッグ", f"/my/配下検出: {url[:100]}")
                 creator_page = p
             # creator.line.me にいるページ（ログインページ以外）を記録
             elif _is_on_creator_site(url) and "/signup/" not in url:
                 creator_page = p
             # OAuth コールバック中のページ
             if "/signup/line_callback" in url:
-                status.update("ログイン", f"OAuthコールバック検出", 15)
+                status.update("デバッグ", "OAuthコールバック検出")
                 try:
                     p.wait_for_url(lambda u: "/my/" in u or (_is_on_creator_site(u) and "/signup/" not in u), timeout=15000)
                     if _is_on_dashboard(p):
@@ -210,11 +222,11 @@ def _find_dashboard_page(context: BrowserContext, status: UploadStatus) -> Optio
 
     # creator.line.me にいるがダッシュボードではないページがある場合、リダイレクト試行
     if creator_page:
-        status.update("ログイン", "creator.line.me検出。ダッシュボードへリダイレクト試行...", 15)
+        status.update("デバッグ", "creator.line.me検出。ダッシュボードへリダイレクト試行...")
         if _try_navigate_to_dashboard(creator_page, status):
             return creator_page
         # リダイレクト失敗 → access.line.me に戻された場合はまだ未ログイン
-        if _is_on_login_page(creator_page.url):
+        if _is_on_login_page(_get_real_url(creator_page)):
             return None
 
     return None
@@ -224,11 +236,27 @@ def wait_for_login(page: Page, status: UploadStatus, timeout: int = 300) -> Opti
     """ユーザーがログインするまで待機。ログイン済みのダッシュボードページを返す。"""
     context = page.context
 
+    # 新しいタブ/ポップアップを追跡するリスト
+    new_pages: list[Page] = []
+
+    def _on_new_page(new_page: Page):
+        """新しいタブやポップアップが開かれた時のハンドラ"""
+        new_pages.append(new_page)
+        try:
+            url = _get_real_url(new_page)
+            status.update("デバッグ", f"新しいページ検出: {url[:120]}")
+        except Exception:
+            pass
+
+    context.on("page", _on_new_page)
+
     def _check_all_pages_for_dashboard() -> Optional[Page]:
-        """全ページを確認してダッシュボードのページを返す"""
+        """全ページを確認してダッシュボードのページを返す。
+        page.urlではなくJavaScriptで実URLを取得し、キャッシュ問題を回避。
+        """
         for p in context.pages:
             try:
-                url = p.url
+                url = _get_real_url(p)
                 if "/my/" in url and "access.line.me" not in url:
                     return p
             except Exception:
@@ -236,10 +264,12 @@ def wait_for_login(page: Page, status: UploadStatus, timeout: int = 300) -> Opti
         return None
 
     def _check_all_pages_for_creator_site() -> Optional[Page]:
-        """creator.line.meにいるページを返す（ログインページ除外）"""
+        """creator.line.meにいるページを返す（ログインページ除外）。
+        page.urlではなくJavaScriptで実URLを取得。
+        """
         for p in context.pages:
             try:
-                url = p.url
+                url = _get_real_url(p)
                 if _is_on_creator_site(url) and "/signup/" not in url:
                     return p
             except Exception:
@@ -255,7 +285,7 @@ def wait_for_login(page: Page, status: UploadStatus, timeout: int = 300) -> Opti
 
     _wait_for_page_ready(page)
 
-    current = page.url
+    current = _get_real_url(page)
     status.update("デバッグ", f"遷移後URL: {current[:120]}")
 
     # === Step 2: 現在のページ状態を判定 ===
@@ -269,7 +299,7 @@ def wait_for_login(page: Page, status: UploadStatus, timeout: int = 300) -> Opti
     # ケース2: creator.line.meにいるがダッシュボードではない → ダッシュボードへ誘導
     creator = _check_all_pages_for_creator_site()
     if creator:
-        status.update("ログイン", "creator.line.me検出。ダッシュボードへ誘導中...", 15)
+        status.update("デバッグ", "creator.line.me検出。ダッシュボードへ誘導中...")
         if _try_navigate_to_dashboard(creator, status):
             status.update("ログイン", "✅ ログイン済み", 20)
             return creator
@@ -285,7 +315,7 @@ def wait_for_login(page: Page, status: UploadStatus, timeout: int = 300) -> Opti
         time.sleep(interval)
         elapsed += interval
 
-        # ダッシュボードに到達したか？
+        # ダッシュボードに到達したか？（実URLで判定）
         dashboard = _check_all_pages_for_dashboard()
         if dashboard:
             _wait_for_page_ready(dashboard)
@@ -295,22 +325,27 @@ def wait_for_login(page: Page, status: UploadStatus, timeout: int = 300) -> Opti
         # creator.line.meにいる（ログイン後トップページにリダイレクト）→ ダッシュボードへ
         creator = _check_all_pages_for_creator_site()
         if creator:
-            status.update("ログイン", "ログイン検出。ダッシュボードへ移動中...", 15)
+            status.update("デバッグ", "ログイン検出。ダッシュボードへ移動中...")
             if _try_navigate_to_dashboard(creator, status):
                 status.update("ログイン", "✅ ログイン完了！", 20)
                 return creator
 
-        # 30秒ごとにステータス更新
-        if elapsed % 30 == 0:
+        # ステータス更新（15秒ごとにデバッグ情報を出力）
+        if elapsed % 15 == 0:
             remaining = timeout - elapsed
             page_urls = []
             for p in context.pages:
                 try:
-                    page_urls.append(p.url[:80])
+                    cached_url = p.url[:80]
+                    real_url = _get_real_url(p)[:80]
+                    if cached_url != real_url:
+                        page_urls.append(f"{real_url} (cached:{cached_url})")
+                    else:
+                        page_urls.append(real_url)
                 except Exception:
                     page_urls.append("(error)")
             status.update("ログイン", f"🔓 ブラウザでログインしてください（残り{remaining}秒）", 10)
-            status.update("デバッグ", f"ページ一覧: {page_urls}")
+            status.update("デバッグ", f"ページ一覧(実URL): {page_urls}")
 
     status.update("エラー", "⏰ ログインがタイムアウトしました。もう一度お試しください。")
     return None
@@ -351,7 +386,7 @@ def _dismiss_all_modals(page: Page, status: UploadStatus, max_attempts: int = 10
         time.sleep(1.5)
 
         if not _has_visible_modal():
-            status.update("自動処理中", "✅ モーダル処理完了", 24)
+            status.update("デバッグ", "モーダル処理完了")
             return
 
         status.update("デバッグ", f"モーダル検出 ({attempt+1}/{max_attempts}回目)")
@@ -394,7 +429,7 @@ def _dismiss_all_modals(page: Page, status: UploadStatus, max_attempts: int = 10
                     try:
                         if candidate.is_visible(timeout=500):
                             candidate.click(force=True, timeout=3000)
-                            status.update("自動処理中", f"「{close_text}」をクリック ({attempt+1}回目)", 23)
+                            status.update("デバッグ", f"「{close_text}」をクリック ({attempt+1}回目)")
                             closed = True
                             time.sleep(2)
                             break
@@ -417,7 +452,7 @@ def _dismiss_all_modals(page: Page, status: UploadStatus, max_attempts: int = 10
                     text = (btn.text_content(timeout=500) or "").strip()
                     if text in ("閉じる", "Close", "OK", "はい"):
                         btn.click(force=True, timeout=3000)
-                        status.update("自動処理中", f"ボタン「{text}」をクリック ({attempt+1}回目)", 23)
+                        status.update("デバッグ", f"ボタン「{text}」をクリック ({attempt+1}回目)")
                         closed = True
                         time.sleep(2)
                         break
@@ -434,7 +469,7 @@ def _dismiss_all_modals(page: Page, status: UploadStatus, max_attempts: int = 10
             page.keyboard.press("Escape")
             time.sleep(1.5)
             if not _has_visible_modal():
-                status.update("自動処理中", f"Escapeでモーダルを閉じました ({attempt+1}回目)", 23)
+                status.update("デバッグ", f"Escapeでモーダルを閉じました ({attempt+1}回目)")
                 continue
         except Exception:
             pass
@@ -468,7 +503,7 @@ def _dismiss_all_modals(page: Page, status: UploadStatus, max_attempts: int = 10
                     })()
                 """)
                 if removed > 0:
-                    status.update("自動処理中", f"モーダルを強制削除 ({removed}要素)", 24)
+                    status.update("デバッグ", f"モーダルを強制削除 ({removed}要素)")
                     time.sleep(1)
                     continue
             except Exception as e:
@@ -786,7 +821,7 @@ def _ensure_on_dashboard(page: Page, status: UploadStatus) -> bool:
     """ダッシュボードにいることを確認し、いなければ戻る。"""
     if _is_on_dashboard(page):
         return True
-    status.update("ページ遷移", "ダッシュボードに移動中...", 25)
+    status.update("自動処理中", "ダッシュボードに移動中...", 25)
     return _try_navigate_to_dashboard(page, status)
 
 
@@ -813,11 +848,11 @@ def _click_new_registration(page: Page, status: UploadStatus) -> bool:
             })()
         """)
         if href:
-            status.update("ページ遷移", f"「新規登録」href={href}", 28)
+            status.update("デバッグ", f"「新規登録」href={href}")
             page.goto(href, timeout=15000)
             _wait_for_page_ready(page)
             if page.url != original_url:
-                status.update("ページ遷移", f"page.goto()遷移成功: {page.url}", 30)
+                status.update("デバッグ", f"page.goto()遷移成功: {page.url}")
                 return True
             status.update("デバッグ", "goto後もURL変化なし")
     except Exception as e:
@@ -830,7 +865,7 @@ def _click_new_registration(page: Page, status: UploadStatus) -> bool:
         time.sleep(3)
         _wait_for_page_ready(page)
         if page.url != original_url:
-            status.update("ページ遷移", f"Playwrightクリック遷移成功: {page.url}", 30)
+            status.update("デバッグ", f"Playwrightクリック遷移成功: {page.url}")
             return True
     except Exception as e:
         status.update("デバッグ", f"Playwrightクリック失敗: {e}")
@@ -852,7 +887,7 @@ def _click_new_registration(page: Page, status: UploadStatus) -> bool:
         time.sleep(3)
         _wait_for_page_ready(page)
         if page.url != original_url:
-            status.update("ページ遷移", f"JSクリック遷移成功: {page.url}", 30)
+            status.update("デバッグ", f"JSクリック遷移成功: {page.url}")
             return True
     except Exception as e:
         status.update("デバッグ", f"JSクリック失敗: {e}")
@@ -863,7 +898,7 @@ def _click_new_registration(page: Page, status: UploadStatus) -> bool:
 
 def navigate_to_new_sticker(page: Page, status: UploadStatus) -> bool:
     """スタンプ新規作成ページに遷移する。"""
-    status.update("ページ遷移", f"新規登録ページに移動中... 現在URL: {page.url[:100]}", 25)
+    status.update("自動処理中", "新規登録ページに移動中...", 25)
 
     # ダッシュボードにいる場合、「新規登録」のhrefを取得して直接遷移
     try:
@@ -883,14 +918,14 @@ def navigate_to_new_sticker(page: Page, status: UploadStatus) -> bool:
             _wait_for_page_ready(page)
             if "/create" in page.url:
                 status.save_screenshot(page, "03_direct_nav")
-                status.update("ページ遷移", f"直接遷移成功: {page.url}", 27)
+                status.update("デバッグ", f"直接遷移成功: {page.url}")
                 return True
     except Exception as e:
         status.update("デバッグ", f"href直接遷移失敗: {e}")
 
     # フォールバック: ダッシュボード経由
     if not _ensure_on_dashboard(page, status):
-        status.update("エラー", f"ダッシュボードに到達できませんでした。URL: {page.url[:100]}")
+        status.update("エラー", "ダッシュボードに到達できませんでした。もう一度お試しください。")
         status.save_screenshot(page, "03_dashboard_fail")
         return False
 
@@ -900,18 +935,18 @@ def navigate_to_new_sticker(page: Page, status: UploadStatus) -> bool:
     status.save_screenshot(page, "03_dashboard")
 
     # ---- 「新規登録」ボタンをクリック ----
-    status.update("ページ遷移", "「新規登録」ボタンを探しています...", 27)
+    status.update("自動処理中", "新規登録の準備中...", 27)
 
     if not _click_new_registration(page, status):
         status.save_screenshot(page, "03_new_reg_failed")
         status.dump_page_info(page, "新規登録失敗")
-        status.update("エラー", "「新規登録」ボタンが見つかりません。デバッグスクリーンショットを確認してください。")
+        status.update("エラー", "新規登録ページに移動できませんでした。もう一度お試しください。")
         return False
 
     # 404ページに飛んでしまった場合はダッシュボードに戻ってリトライ
     page_text = (page.text_content("body") or "")[:500]
     if "存在しません" in page_text or "404" in page.title():
-        status.update("ページ遷移", "404ページに到達。ダッシュボードに戻ります...", 27)
+        status.update("自動処理中", "ページを再読み込みしています...", 27)
         if _ensure_on_dashboard(page, status):
             _dismiss_all_modals(page, status)
             time.sleep(1)
@@ -919,7 +954,7 @@ def navigate_to_new_sticker(page: Page, status: UploadStatus) -> bool:
             return False
 
     status.save_screenshot(page, "04_after_new_reg_click")
-    status.update("ページ遷移", f"新規登録クリック後: {page.url}", 30)
+    status.update("デバッグ", f"新規登録クリック後: {page.url}")
     status.dump_page_info(page, "新規登録後")
 
     # ---- スタンプタイプ選択 ----
@@ -954,7 +989,7 @@ def navigate_to_new_sticker(page: Page, status: UploadStatus) -> bool:
             })()
         """)
         if result:
-            status.update("ページ遷移", f"「スタンプ」を選択: {result}", 32)
+            status.update("自動処理中", "スタンプの種類を選択中...", 32)
             time.sleep(3)
             _wait_for_page_ready(page)
             status.save_screenshot(page, "05_after_sticker_select")
@@ -965,7 +1000,7 @@ def navigate_to_new_sticker(page: Page, status: UploadStatus) -> bool:
 
     # スタンプタイプ選択後にURL変化チェック
     if page.url != type_select_url:
-        status.update("ページ遷移", f"タイプ選択後URL: {page.url}", 33)
+        status.update("デバッグ", f"タイプ選択後URL: {page.url}")
     # 誤ナビゲーション検知（promotionページに飛んでいないか）
     if "promotion" in page.url:
         status.update("デバッグ", "⚠️ promotionページに誤遷移！/createに戻ります")
@@ -974,17 +1009,17 @@ def navigate_to_new_sticker(page: Page, status: UploadStatus) -> bool:
         time.sleep(2)
 
     current_url = page.url
-    status.update("ページ遷移", f"最終URL: {current_url}", 35)
+    status.update("デバッグ", f"最終URL: {current_url}")
 
     form_count = page.locator("input[type='text'], textarea, input[type='file'], select").count()
     if form_count > 0:
-        status.update("ページ遷移", f"スタンプ作成ページに到着（フォーム要素: {form_count}個）", 35)
+        status.update("自動処理中", "スタンプ情報の入力を準備中...", 35)
         status.save_screenshot(page, "05_form_found")
         return True
 
     status.save_screenshot(page, "05_no_form")
     status.dump_page_info(page, "フォーム未検出")
-    status.update("ページ遷移", "フォームが見つかりません。デバッグ情報を記録しました。", 30)
+    status.update("デバッグ", "フォームが見つかりません。デバッグ情報を記録しました。")
     return False
 
 
@@ -994,7 +1029,7 @@ def navigate_to_new_sticker(page: Page, status: UploadStatus) -> bool:
 
 def fill_sticker_info(page: Page, title: str, description: str, status: UploadStatus):
     """スタンプのタイトル・説明文を入力する。"""
-    status.update("情報入力", "スタンプ情報を入力中...", 40)
+    status.update("自動処理中", "スタンプ情報を入力中...", 40)
     status.save_screenshot(page, "06_before_fill")
 
     inputs = page.locator("input[type='text']")
@@ -1003,7 +1038,7 @@ def fill_sticker_info(page: Page, title: str, description: str, status: UploadSt
     # タイトル入力
     try:
         count = inputs.count()
-        status.update("情報入力", f"テキスト入力欄: {count}個", 42)
+        status.update("デバッグ", f"テキスト入力欄: {count}個")
         title_filled = False
         for i in range(count):
             inp = inputs.nth(i)
@@ -1025,7 +1060,7 @@ def fill_sticker_info(page: Page, title: str, description: str, status: UploadSt
                any(kw in placeholder for kw in ["title", "タイトル", "名前"]) or \
                any(kw in label_text for kw in ["title", "タイトル"]):
                 inp.fill(title)
-                status.update("情報入力", f"タイトル入力: {title}", 45)
+                status.update("デバッグ", f"タイトル入力: {title}")
                 title_filled = True
                 break
 
@@ -1033,15 +1068,15 @@ def fill_sticker_info(page: Page, title: str, description: str, status: UploadSt
             for i in range(count):
                 if inputs.nth(i).is_visible():
                     inputs.nth(i).fill(title)
-                    status.update("情報入力", f"タイトル（最初のinput）: {title}", 45)
+                    status.update("デバッグ", f"タイトル（最初のinput）: {title}")
                     break
     except Exception as e:
-        status.update("情報入力", f"タイトル入力失敗: {e}")
+        status.update("デバッグ", f"タイトル入力失敗: {e}")
 
     # 説明文入力
     try:
         ta_count = textareas.count()
-        status.update("情報入力", f"テキストエリア: {ta_count}個", 47)
+        status.update("デバッグ", f"テキストエリア: {ta_count}個")
         desc_filled = False
         for i in range(ta_count):
             ta = textareas.nth(i)
@@ -1053,7 +1088,7 @@ def fill_sticker_info(page: Page, title: str, description: str, status: UploadSt
             if any(kw in name for kw in ["desc", "detail", "explain"]) or \
                any(kw in placeholder for kw in ["desc", "説明", "詳細"]):
                 ta.fill(description)
-                status.update("情報入力", f"説明入力: {description}", 50)
+                status.update("デバッグ", f"説明入力: {description}")
                 desc_filled = True
                 break
 
@@ -1061,10 +1096,10 @@ def fill_sticker_info(page: Page, title: str, description: str, status: UploadSt
             for i in range(ta_count):
                 if textareas.nth(i).is_visible():
                     textareas.nth(i).fill(description)
-                    status.update("情報入力", f"説明（最初のtextarea）: {description}", 50)
+                    status.update("デバッグ", f"説明（最初のtextarea）: {description}")
                     break
     except Exception as e:
-        status.update("情報入力", f"説明文入力失敗: {e}")
+        status.update("デバッグ", f"説明文入力失敗: {e}")
 
     # コピーライト入力（空なら入力）
     try:
@@ -1078,9 +1113,9 @@ def fill_sticker_info(page: Page, title: str, description: str, status: UploadSt
                 current_val = inp.input_value()
                 if not current_val.strip():
                     inp.fill("fus")
-                    status.update("情報入力", "コピーライト入力: fus", 52)
+                    status.update("デバッグ", "コピーライト入力: fus")
                 else:
-                    status.update("情報入力", f"コピーライト既入力: {current_val}", 52)
+                    status.update("デバッグ", f"コピーライト既入力: {current_val}")
                 copyright_filled = True
                 break
         if not copyright_filled:
@@ -1115,7 +1150,7 @@ def fill_sticker_info(page: Page, title: str, description: str, status: UploadSt
             })()
         """)
         if ai_checked:
-            status.update("情報入力", f"AI使用: {ai_checked}", 53)
+            status.update("デバッグ", f"AI使用: {ai_checked}")
         else:
             status.update("デバッグ", "AI使用フィールド未検出")
     except Exception as e:
@@ -1139,7 +1174,7 @@ def submit_creation_form(page: Page, status: UploadStatus) -> bool:
     - 「キャンセル」の隣の要素を探す
     - form.submit()後に405を検知したらGETで再読み込み
     """
-    status.update("フォーム送信", "フォームを保存中...", 55)
+    status.update("自動処理中", "スタンプ情報を保存中...", 55)
 
     url_before = page.url
 
@@ -1224,7 +1259,7 @@ def submit_creation_form(page: Page, status: UploadStatus) -> bool:
             })()
         """)
         if result:
-            status.update("フォーム送信", f"「保存」ボタンクリック: {result}", 57)
+            status.update("デバッグ", f"「保存」ボタンクリック: {result}")
             save_clicked = True
     except Exception as e:
         status.update("デバッグ", f"保存ボタン検索失敗: {e}")
@@ -1236,7 +1271,7 @@ def submit_creation_form(page: Page, status: UploadStatus) -> bool:
             if save_btn.count() > 0:
                 save_btn.last.scroll_into_view_if_needed()
                 save_btn.last.click()
-                status.update("フォーム送信", "Playwright get_by_text('保存') クリック", 57)
+                status.update("デバッグ", "Playwright get_by_text('保存') クリック")
                 save_clicked = True
         except Exception as e:
             status.update("デバッグ", f"get_by_text('保存')失敗: {e}")
@@ -1248,7 +1283,7 @@ def submit_creation_form(page: Page, status: UploadStatus) -> bool:
             if submit_btn.count() > 0:
                 submit_btn.first.scroll_into_view_if_needed()
                 submit_btn.first.click()
-                status.update("フォーム送信", "submitボタンをクリック", 57)
+                status.update("デバッグ", "submitボタンをクリック")
                 save_clicked = True
         except Exception:
             pass
@@ -1268,7 +1303,7 @@ def submit_creation_form(page: Page, status: UploadStatus) -> bool:
                 })()
             """)
             if submitted:
-                status.update("フォーム送信", "form.submit()を実行（405の可能性あり）", 57)
+                status.update("デバッグ", "form.submit()を実行（405の可能性あり）")
                 save_clicked = True
         except Exception as e:
             status.update("デバッグ", f"form.submit()失敗: {e}")
@@ -1292,7 +1327,7 @@ def submit_creation_form(page: Page, status: UploadStatus) -> bool:
         ok_btn = page.get_by_text("OK", exact=True)
         if ok_btn.count() > 0:
             ok_btn.last.click()
-            status.update("フォーム送信", "確認ダイアログ「OK」クリック", 58)
+            status.update("デバッグ", "確認ダイアログ「OK」クリック")
             ok_clicked = True
     except Exception as e:
         status.update("デバッグ", f"OK検索失敗(get_by_text): {e}")
@@ -1304,7 +1339,7 @@ def submit_creation_form(page: Page, status: UploadStatus) -> bool:
                 ok_role = page.get_by_role(role, name="OK")
                 if ok_role.count() > 0:
                     ok_role.last.click()
-                    status.update("フォーム送信", f"確認ダイアログ「OK」クリック (role={role})", 58)
+                    status.update("デバッグ", f"確認ダイアログ「OK」クリック (role={role})")
                     ok_clicked = True
                     break
         except Exception as e:
@@ -1334,13 +1369,13 @@ def submit_creation_form(page: Page, status: UploadStatus) -> bool:
                 })()
             """)
             if js_ok:
-                status.update("フォーム送信", f"確認ダイアログクリック(JS): {js_ok}", 58)
+                status.update("デバッグ", f"確認ダイアログクリック(JS): {js_ok}")
                 ok_clicked = True
         except Exception as e:
             status.update("デバッグ", f"OK検索失敗(JS): {e}")
 
     if ok_clicked:
-        status.update("フォーム送信", "確認ダイアログを承認。ページ遷移を待機中...", 58)
+        status.update("自動処理中", "保存中...", 58)
 
     # ページ遷移を待つ
     time.sleep(5)
@@ -1354,11 +1389,11 @@ def submit_creation_form(page: Page, status: UploadStatus) -> bool:
     try:
         page_title = page.title()
         if "405" in page_title or "Method Not Allowed" in page_title:
-            status.update("フォーム送信", f"405検知。GETで再読み込み: {new_url}", 58)
+            status.update("デバッグ", f"405検知。GETで再読み込み: {new_url}")
             page.goto(new_url, timeout=15000)
             _wait_for_page_ready(page)
             new_url = page.url
-            status.update("フォーム送信", f"再読み込み後: {new_url}", 59)
+            status.update("デバッグ", f"再読み込み後: {new_url}")
     except Exception as e:
         status.update("デバッグ", f"405リカバリ失敗: {e}")
 
@@ -1372,7 +1407,7 @@ def submit_creation_form(page: Page, status: UploadStatus) -> bool:
             page.go_back()
             _wait_for_page_ready(page)
             return False
-        status.update("フォーム送信", f"ページ遷移成功: {new_url}", 60)
+        status.update("自動処理中", "保存完了！画像アップロードの準備中...", 60)
         return True
 
     # URLが変わらない場合
@@ -1407,7 +1442,7 @@ def upload_images(page: Page, output_dir: Path, status: UploadStatus):
                     if tab.count() > 0 and tab.first.is_visible(timeout=2000):
                         tab.first.click()
                         tab_clicked = True
-                        status.update("画像アップ", f"「{tab_text}」タブをクリック")
+                        status.update("画像アップ", "スタンプ画像を準備中...")
                         time.sleep(2)
                         break
                 except Exception:
@@ -1416,7 +1451,7 @@ def upload_images(page: Page, output_dir: Path, status: UploadStatus):
                 # URLフラグメントで直接遷移
                 base_url = current_url.split("#")[0]
                 page.goto(f"{base_url}#/image", timeout=15000)
-                status.update("画像アップ", "#/image に直接遷移")
+                status.update("画像アップ", "スタンプ画像を準備中...")
                 time.sleep(2)
             # 遷移後にモーダルが再出現する可能性
             _force_dismiss_qr_modal(page, status)
@@ -1441,7 +1476,7 @@ def upload_images(page: Page, output_dir: Path, status: UploadStatus):
                             if tag in ["BUTTON", "A", "SPAN", "DIV"]:
                                 btn.click()
                                 edit_clicked = True
-                                status.update("画像アップ", f"「{edit_text}」ボタンをクリック (tag={tag})")
+                                status.update("画像アップ", "画像の編集モードに移行中...")
                                 time.sleep(3)
                                 # 編集モード遷移後にモーダル対策
                                 _force_dismiss_qr_modal(page, status)
@@ -1458,7 +1493,7 @@ def upload_images(page: Page, output_dir: Path, status: UploadStatus):
                 current_url = page.url
                 base_url = current_url.split("#")[0]
                 page.goto(f"{base_url}#/image/edit", timeout=15000)
-                status.update("画像アップ", "#/image/edit に直接遷移")
+                status.update("画像アップ", "画像の編集モードに移行中...")
                 time.sleep(3)
                 _force_dismiss_qr_modal(page, status)
             except Exception as e:
@@ -1475,12 +1510,12 @@ def upload_images(page: Page, output_dir: Path, status: UploadStatus):
     tab_file = output_dir / "tab.png"
     has_main = main_file.exists()
     has_tab = tab_file.exists()
-    status.update("画像アップ", f"main.png: {'あり' if has_main else 'なし'}, tab.png: {'あり' if has_tab else 'なし'}")
+    status.update("デバッグ", f"main.png: {'あり' if has_main else 'なし'}, tab.png: {'あり' if has_tab else 'なし'}")
 
     # 方法1: 複数のfile inputがある場合（一度に全てセット可能）
     file_inputs = page.locator("input[type='file']")
     fi_count = file_inputs.count()
-    status.update("画像アップ", f"file input数: {fi_count}", 66)
+    status.update("画像アップ", "画像をアップロードしています...", 66)
 
     if fi_count >= total:
         # file inputをaccept属性とコンテキストで分類
@@ -1492,19 +1527,19 @@ def upload_images(page: Page, output_dir: Path, status: UploadStatus):
         if has_main and fi_map.get("main") is not None:
             try:
                 file_inputs.nth(fi_map["main"]).set_input_files(str(main_file))
-                status.update("画像アップ", f"main.png → input[{fi_map['main']}] OK", 66)
+                status.update("画像アップ", "メイン画像をアップロード中...", 66)
                 time.sleep(1)
             except Exception as e:
-                status.update("画像アップ", f"main.png 失敗: {e}")
+                status.update("デバッグ", f"main.png 失敗: {e}")
 
         # tab.pngをアップロード
         if has_tab and fi_map.get("tab") is not None:
             try:
                 file_inputs.nth(fi_map["tab"]).set_input_files(str(tab_file))
-                status.update("画像アップ", f"tab.png → input[{fi_map['tab']}] OK", 67)
+                status.update("画像アップ", "タブ画像をアップロード中...", 67)
                 time.sleep(1)
             except Exception as e:
-                status.update("画像アップ", f"tab.png 失敗: {e}")
+                status.update("デバッグ", f"tab.png 失敗: {e}")
 
         # スタンプ画像のfile inputインデックスリスト
         sticker_indices = fi_map.get("stickers", [])
@@ -1518,10 +1553,10 @@ def upload_images(page: Page, output_dir: Path, status: UploadStatus):
                     # フォールバック: 分類外のinputを順番に使う
                     idx = i + (fi_count - total)
                 file_inputs.nth(idx).set_input_files(str(stamp_file))
-                status.update("画像アップ", f"[{i+1}/{total}] {stamp_file.name} → input[{idx}] OK", 65 + int((i+1)/total*25))
+                status.update("画像アップ", f"スタンプ画像をアップロード中... ({i+1}/{total}枚)", 65 + int((i+1)/total*25))
                 time.sleep(1)
             except Exception as e:
-                status.update("画像アップ", f"[{i+1}/{total}] {stamp_file.name} 失敗: {e}")
+                status.update("デバッグ", f"[{i+1}/{total}] {stamp_file.name} 失敗: {e}")
         status.save_screenshot(page, "10_after_upload")
         status.update("画像アップ", "画像アップロード完了！", 95)
         return
@@ -1532,7 +1567,7 @@ def upload_images(page: Page, output_dir: Path, status: UploadStatus):
             fi = file_inputs.first
             file_paths = [str(f) for f in stamp_files]
             fi.set_input_files(file_paths)
-            status.update("画像アップ", f"一括アップロード: {total}枚", 85)
+            status.update("画像アップ", f"スタンプ画像をアップロード中... ({total}枚)", 85)
             time.sleep(5)
             status.save_screenshot(page, "10_after_upload")
             status.update("画像アップ", "画像アップロード完了！", 95)
@@ -1566,7 +1601,7 @@ def upload_images(page: Page, output_dir: Path, status: UploadStatus):
                     if slots.count() > 0:
                         slots.first.click()
                         slot_clicked = True
-                        status.update("画像アップ", f"[{i+1}/{total}] スロットクリック: {selector[:40]}")
+                        status.update("画像アップ", f"スタンプ画像をアップロード中... ({i+1}/{total}枚)")
                         time.sleep(2)
                         break
                 except Exception:
@@ -1593,7 +1628,7 @@ def upload_images(page: Page, output_dir: Path, status: UploadStatus):
                 if not uploaded:
                     file_inputs.last.set_input_files(str(stamp_file))
 
-                status.update("画像アップ", f"[{i+1}/{total}] {stamp_file.name} OK", progress)
+                status.update("画像アップ", f"スタンプ画像をアップロード中... ({i+1}/{total}枚)", progress)
                 uploaded_count += 1
                 time.sleep(3)
             else:
@@ -1609,11 +1644,11 @@ def upload_images(page: Page, output_dir: Path, status: UploadStatus):
                                 clickable.first.click()
                             file_chooser = fc_info.value
                             file_chooser.set_files(str(stamp_file))
-                            status.update("画像アップ", f"[{i+1}/{total}] {stamp_file.name} OK (filechooser)", progress)
+                            status.update("画像アップ", f"スタンプ画像をアップロード中... ({i+1}/{total}枚)", progress)
                             uploaded_count += 1
                             time.sleep(3)
                         else:
-                            status.update("画像アップ", f"[{i+1}/{total}] アップロード手段なし", progress)
+                            status.update("デバッグ", f"[{i+1}/{total}] アップロード手段なし")
                     else:
                         # スロットはクリックしたがfile inputが出ない
                         try:
@@ -1624,12 +1659,12 @@ def upload_images(page: Page, output_dir: Path, status: UploadStatus):
                             uploaded_count += 1
                             time.sleep(3)
                         except Exception:
-                            status.update("画像アップ", f"[{i+1}/{total}] filechooser待機タイムアウト", progress)
+                            status.update("デバッグ", f"[{i+1}/{total}] filechooser待機タイムアウト")
                 except Exception as e:
-                    status.update("画像アップ", f"[{i+1}/{total}] {stamp_file.name} 失敗: {e}", progress)
+                    status.update("デバッグ", f"[{i+1}/{total}] {stamp_file.name} 失敗: {e}")
 
         except Exception as e:
-            status.update("画像アップ", f"[{i+1}/{total}] {stamp_file.name} 失敗: {e}", progress)
+            status.update("デバッグ", f"[{i+1}/{total}] {stamp_file.name} 失敗: {e}")
 
     status.save_screenshot(page, "10_after_upload")
     status.update("画像アップ", f"画像アップロード完了！({uploaded_count}/{total}枚成功)", 95)
@@ -1639,24 +1674,24 @@ def _submit_review_request(page: Page, status: UploadStatus):
     """画像アップロード後、審査リクエストボタンを押して審査提出する。
     画像編集ページからスタンプ詳細ページに戻り、「リクエスト」ボタンをクリックする。
     """
-    status.update("審査リクエスト", "審査リクエスト送信準備中...", 96)
+    status.update("自動処理中", "審査リクエストを準備中...", 96)
 
     # 画像アップロード後のページURLからsticker IDを取得
     # 例: /my/{userId}/sticker/{stickerId}/...
     match = re.search(r"/sticker/(\d+)", page.url)
     if not match:
-        status.update("エラー", f"スタンプIDが取得できません。URL: {page.url[:100]}")
+        status.update("エラー", "スタンプの登録に問題が発生しました。もう一度お試しください。")
         return
 
     sticker_id = match.group(1)
-    status.update("審査リクエスト", f"スタンプID: {sticker_id}")
+    status.update("デバッグ", f"スタンプID: {sticker_id}")
 
     # Step 1: 画像編集モードを抜ける（「戻る」ボタンまたはURL遷移）
     # 編集ページ(.../sticker/{id}/image#/image/edit)からスタンプ詳細ページに戻る
     user_path = _extract_user_path(page)
     if user_path:
         detail_url = f"https://creator.line.me{user_path}/sticker/{sticker_id}"
-        status.update("審査リクエスト", f"スタンプ詳細ページに遷移: {detail_url[:80]}")
+        status.update("デバッグ", f"スタンプ詳細ページに遷移: {detail_url[:80]}")
         page.goto(detail_url, timeout=15000)
         _wait_for_page_ready(page)
         time.sleep(3)
@@ -1669,7 +1704,7 @@ def _submit_review_request(page: Page, status: UploadStatus):
                     btn.first.click()
                     time.sleep(3)
                     _wait_for_page_ready(page)
-                    status.update("審査リクエスト", f"「{back_text}」で詳細ページへ戻りました")
+                    status.update("デバッグ", f"「{back_text}」で詳細ページへ戻りました")
                     break
         except Exception as e:
             status.update("デバッグ", f"戻るボタン失敗: {e}")
@@ -1696,7 +1731,7 @@ def _submit_review_request(page: Page, status: UploadStatus):
                     if btn.is_visible(timeout=2000):
                         tag = btn.evaluate("e => e.tagName")
                         text = btn.text_content().strip()[:30]
-                        status.update("審査リクエスト", f"「{request_text}」クリック: tag={tag}, text='{text}'")
+                        status.update("デバッグ", f"「{request_text}」クリック: tag={tag}, text='{text}'")
                         btn.click()
                         request_clicked = True
                         time.sleep(3)
@@ -1728,14 +1763,14 @@ def _submit_review_request(page: Page, status: UploadStatus):
                 })()
             """)
             if result:
-                status.update("審査リクエスト", f"JSクリック成功: {result}")
+                status.update("デバッグ", f"JSクリック成功: {result}")
                 request_clicked = True
                 time.sleep(3)
         except Exception as e:
             status.update("デバッグ", f"JSクリック失敗: {e}")
 
     if not request_clicked:
-        status.update("エラー", "「リクエスト」ボタンが見つかりません。手動で押してください。")
+        status.update("エラー", "審査リクエストの送信に失敗しました。もう一度お試しください。")
         status.save_screenshot(page, "11_request_button_not_found")
         return
 
@@ -1758,7 +1793,7 @@ def _submit_review_request(page: Page, status: UploadStatus):
                 try:
                     if cb.is_visible(timeout=1000) and not cb.is_checked():
                         cb.check(force=True)
-                        status.update("審査リクエスト", f"チェックボックスをチェック ({ci+1}/{cb_count})")
+                        status.update("デバッグ", f"チェックボックスをチェック ({ci+1}/{cb_count})")
                         time.sleep(0.5)
                 except Exception:
                     continue
@@ -1776,7 +1811,7 @@ def _submit_review_request(page: Page, status: UploadStatus):
                             if candidate.is_visible(timeout=1000):
                                 candidate.click()
                                 confirmed = True
-                                status.update("審査リクエスト", f"「{confirm_text}」クリック (確認ダイアログ)")
+                                status.update("デバッグ", f"「{confirm_text}」クリック (確認ダイアログ)")
                                 time.sleep(2)
                                 break
                         except Exception:
@@ -1793,7 +1828,7 @@ def _submit_review_request(page: Page, status: UploadStatus):
         time.sleep(2)
 
     status.save_screenshot(page, "12_after_request")
-    status.update("審査リクエスト", "審査リクエスト送信完了！", 99)
+    status.update("自動処理中", "審査リクエスト送信完了！", 99)
 
 
 # ============================================================
@@ -1901,7 +1936,7 @@ def upload_to_line(
 
     with sync_playwright() as p:
         context = _launch_browser(p, user_data_dir, status)
-        status.update("開始", "ブラウザ起動成功", 3)
+        status.update("デバッグ", "ブラウザ起動成功")
 
         # persistent context はデフォルトで空ページを1つ作る。
         # 不要な空ページを閉じてから新しいページを作る。
@@ -1913,7 +1948,7 @@ def upload_to_line(
                     pass
 
         page = context.new_page()
-        status.update("開始", "新しいページ作成完了", 4)
+        status.update("デバッグ", "新しいページ作成完了")
 
         # ============================================================
         # 全ページに対してモーダル自動非表示CSS/JSを注入
@@ -1996,7 +2031,7 @@ def upload_to_line(
                     })()
                 """)
                 if create_url:
-                    status.update("自動処理中", f"新規登録URL取得: {create_url}", 23)
+                    status.update("デバッグ", f"新規登録URL取得: {create_url}")
             except Exception as e:
                 status.update("デバッグ", f"新規登録URL取得失敗: {e}")
 
@@ -2005,31 +2040,23 @@ def upload_to_line(
             status.update("自動処理中", "スタンプを自動登録しています。このページはそのままでお待ちください...", 25)
 
             # Step 2: スタンプ作成ページへ遷移
+            # navigate_to_new_sticker() はダッシュボード→新規登録クリック→
+            # スタンプタイプ選択→フォーム表示 まで一貫して行う。
+            # 直接URLでの遷移はタイプ選択がスキップされるため使用しない。
             sticker_page_reached = False
             for nav_attempt in range(3):
-                # 方法A: ダッシュボードから取得したURLで直接遷移
-                if create_url:
-                    try:
-                        page.goto(create_url, wait_until="domcontentloaded", timeout=30000)
-                        time.sleep(3)
-                        _wait_for_page_ready(page)
-                        if "/create" in page.url:
-                            sticker_page_reached = True
-                            status.update("ページ遷移", f"新規登録ページに到達: {page.url}", 30)
-                            break
-                    except Exception as e:
-                        status.update("デバッグ", f"直接遷移失敗 ({nav_attempt+1}/3): {e}")
-                # 方法B: navigate_to_new_stickerで「新規登録」ボタンクリック
-                status.update("ページ遷移", f"リトライ {nav_attempt + 1}/3...", 25)
+                status.update("自動処理中", "スタンプ作成ページに移動中...", 25)
                 try:
                     if navigate_to_new_sticker(page, status):
                         sticker_page_reached = True
                         break
-                except Exception:
-                    pass
+                except Exception as e:
+                    status.update("デバッグ", f"navigate_to_new_sticker失敗 ({nav_attempt+1}/3): {e}")
+                if nav_attempt < 2:
+                    time.sleep(3)
 
             if not sticker_page_reached:
-                status.update("エラー", "スタンプ作成ページに到達できませんでした。")
+                status.update("エラー", "スタンプ作成ページに到達できませんでした。もう一度お試しください。")
                 status.save_screenshot(page, "99_final_error")
                 return False
 
@@ -2039,7 +2066,7 @@ def upload_to_line(
             # Step 5: フォーム保存（新規登録フォームを送信→編集ページへ遷移）
             form_saved = submit_creation_form(page, status)
             if form_saved:
-                status.update("フォーム送信", "編集ページに遷移しました", 62)
+                status.update("自動処理中", "画像アップロードの準備中...", 62)
                 time.sleep(3)
                 _wait_for_page_ready(page)
             else:
@@ -2070,7 +2097,7 @@ def upload_to_line(
             status.update("中断", "ユーザーにより中断されました。")
             return False
         except Exception as e:
-            status.update("エラー", f"予期しないエラー: {e}")
+            status.update("エラー", "予期しないエラーが発生しました。もう一度お試しください。")
             status.save_screenshot(page, "99_exception")
             return False
         finally:

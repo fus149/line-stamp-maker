@@ -490,7 +490,7 @@ function startStatusPolling() {
 
       const statusEl = $("#line-upload-status-text");
       if (statusEl) {
-        statusEl.textContent = `[${data.step}] ${data.message}`;
+        statusEl.textContent = data.message;
       }
 
       const progressEl = $("#line-upload-progress");
@@ -506,7 +506,7 @@ function startStatusPolling() {
       }
 
       // ログイン完了後 → 待機画面に切り替え
-      const waitingSteps = ["自動処理中", "ページ遷移", "情報入力", "フォーム送信", "画像アップ", "審査準備中", "審査リクエスト"];
+      const waitingSteps = ["自動処理中", "画像アップ", "審査準備中"];
       if (waitingSteps.includes(data.step)) {
         const uploading = $("#line-uploading");
         const waiting = $("#line-waiting");
