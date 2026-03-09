@@ -7,6 +7,7 @@ from __future__ import annotations
 import json
 import random
 import shutil
+import time
 import uuid
 from pathlib import Path
 
@@ -38,6 +39,9 @@ SESSIONS_DIR.mkdir(exist_ok=True)
 app.mount("/static", StaticFiles(directory=str(PROJECT_ROOT / "static")), name="static")
 templates = Jinja2Templates(directory=str(PROJECT_ROOT / "templates"))
 
+# サーバー起動時刻をキャッシュバスターに使用（別PCでも最新CSS/JSを確実に読み込む）
+CACHE_BUST = str(int(time.time()))
+
 
 def load_templates() -> list[str]:
     with open(TEMPLATES_PATH, encoding="utf-8") as f:
@@ -46,7 +50,7 @@ def load_templates() -> list[str]:
 
 @app.get("/")
 async def index(request: Request):
-    return templates.TemplateResponse("index.html", {"request": request})
+    return templates.TemplateResponse("index.html", {"request": request, "v": CACHE_BUST})
 
 
 @app.get("/api/templates")
