@@ -1835,10 +1835,10 @@ def upload_to_line(
     user_data_dir.mkdir(exist_ok=True)
 
     # 前回のブラウザが異常終了した場合のロックファイルを削除
-    singleton_lock = user_data_dir / "SingletonLock"
-    if singleton_lock.exists():
+    for lock_name in ["SingletonLock", "SingletonCookie", "SingletonSocket"]:
+        lock_path = user_data_dir / lock_name
         try:
-            singleton_lock.unlink()
+            lock_path.unlink(missing_ok=True)
         except OSError:
             pass
 
