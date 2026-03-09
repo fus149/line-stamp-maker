@@ -249,22 +249,6 @@ def wait_for_login(page: Page, status: UploadStatus, timeout: int = 300) -> Opti
             return page
 
     # ログインページにいる → ユーザーにログインを促す
-    # ブラウザウィンドウにバナーを表示して目立たせる
-    try:
-        page.evaluate("""
-            (() => {
-                const banner = document.createElement('div');
-                banner.id = 'pw-login-banner';
-                banner.style.cssText = 'position:fixed;top:0;left:0;right:0;z-index:99999;' +
-                    'background:#e74c3c;color:white;padding:16px;text-align:center;' +
-                    'font-size:18px;font-weight:bold;box-shadow:0 2px 10px rgba(0,0,0,0.3);';
-                banner.textContent = '⚠️ このブラウザでLINEにログインしてください ⚠️';
-                document.body.prepend(banner);
-            })()
-        """)
-    except Exception:
-        pass
-
     page.bring_to_front()
     status.update("ログイン", f"⚠️ 新しく開いたブラウザウィンドウでログインしてください（{timeout}秒以内）", 10)
 
@@ -1681,6 +1665,14 @@ def upload_to_line(
     project_root = Path(__file__).resolve().parent.parent
     user_data_dir = project_root / ".browser_data"
     user_data_dir.mkdir(exist_ok=True)
+
+    # 前回のブラウザが異常終了した場合のロックファイルを削除
+    singleton_lock = user_data_dir / "SingletonLock"
+    if singleton_lock.exists():
+        try:
+            singleton_lock.unlink()
+        except OSError:
+            pass
 
     with sync_playwright() as p:
         context = p.chromium.launch_persistent_context(
