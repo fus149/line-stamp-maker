@@ -311,41 +311,53 @@ def wait_for_login(page: Page, status: UploadStatus, timeout: int = 300) -> Opti
     # === Step 3: ポーリングで待機 ===
     elapsed = 0
     interval = 3
+    login_detected = False
     while elapsed < timeout:
         time.sleep(interval)
         elapsed += interval
 
-        # ダッシュボードに到達したか？（実URLで判定）
-        dashboard = _check_all_pages_for_dashboard()
-        if dashboard:
-            _wait_for_page_ready(dashboard)
-            status.update("ログイン", "✅ ログイン完了！", 20)
-            return dashboard
+        # 全ページのURLを安全に確認（ナビゲートしない）
+        for p in context.pages:
+            try:
+                url = _get_real_url(p)
+                # ダッシュボードに到達した
+                if "/my/" in url and "access.line.me" not in url:
+                    _wait_for_page_ready(p)
+                    status.update("ログイン", "✅ ログイン完了！", 20)
+                    return p
+                # creator.line.meにいる（ログイン後リダイレクト）がダッシュボードではない
+                if _is_on_creator_site(url) and "/signup/" not in url and "access.line.me" not in url:
+                    if not login_detected:
+                        login_detected = True
+                        status.update("デバッグ", f"ログイン検出: {url[:100]}")
+                    # ダッシュボードへナビゲート（1回だけ）
+                    try:
+                        p.goto("https://creator.line.me/my/sticker/", timeout=15000)
+                        _wait_for_page_ready(p)
+                        new_url = _get_real_url(p)
+                        if "/my/" in new_url:
+                            status.update("ログイン", "✅ ログイン完了！", 20)
+                            return p
+                    except Exception as e:
+                        status.update("デバッグ", f"ダッシュボード遷移失敗: {e}")
+            except Exception:
+                continue
 
-        # creator.line.meにいる（ログイン後トップページにリダイレクト）→ ダッシュボードへ
-        creator = _check_all_pages_for_creator_site()
-        if creator:
-            status.update("デバッグ", "ログイン検出。ダッシュボードへ移動中...")
-            if _try_navigate_to_dashboard(creator, status):
-                status.update("ログイン", "✅ ログイン完了！", 20)
-                return creator
+        # 新しいタブ/ポップアップも確認
+        if len(context.pages) == 0:
+            status.update("デバッグ", "ブラウザページが0件。ブラウザが閉じられた可能性")
 
-        # ステータス更新（15秒ごとにデバッグ情報を出力）
+        # ステータス更新（15秒ごと）
         if elapsed % 15 == 0:
             remaining = timeout - elapsed
             page_urls = []
             for p in context.pages:
                 try:
-                    cached_url = p.url[:80]
-                    real_url = _get_real_url(p)[:80]
-                    if cached_url != real_url:
-                        page_urls.append(f"{real_url} (cached:{cached_url})")
-                    else:
-                        page_urls.append(real_url)
+                    page_urls.append(_get_real_url(p)[:80])
                 except Exception:
                     page_urls.append("(error)")
             status.update("ログイン", f"🔓 ブラウザでログインしてください（残り{remaining}秒）", 10)
-            status.update("デバッグ", f"ページ一覧(実URL): {page_urls}")
+            status.update("デバッグ", f"ページURL: {page_urls}")
 
     status.update("エラー", "⏰ ログインがタイムアウトしました。もう一度お試しください。")
     return None
