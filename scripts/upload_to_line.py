@@ -1969,18 +1969,18 @@ def upload_to_line(
         # ============================================================
         context.add_init_script("""
             (function() {
-                // CSS注入: モーダル・オーバーレイを全て非表示
+                // creator.line.me ドメインのみでモーダル非表示CSSを適用
+                // 重要: access.line.me（ログインページ）では適用しない
+                if (!window.location.hostname.includes('creator.line.me')) return;
+
                 const style = document.createElement('style');
                 style.id = '__auto_modal_hide__';
                 style.textContent = `
                     [role="dialog"],
                     .MdPOP01Modal,
-                    .ExBackdrop,
-                    [class*="backdrop" i],
-                    [class*="overlay" i]:not(#__never_match__) {
+                    .ExBackdrop {
                         display: none !important;
                         visibility: hidden !important;
-                        opacity: 0 !important;
                         pointer-events: none !important;
                     }
                     body {
@@ -1995,22 +1995,19 @@ def upload_to_line(
                     });
                 }
 
-                // MutationObserverでモーダルが後から追加されても即座に非表示
-                const observer = new MutationObserver(function(mutations) {
-                    // CSSが削除されていたら再挿入
+                const observer = new MutationObserver(function() {
                     if (!document.getElementById('__auto_modal_hide__')) {
                         document.head.appendChild(style.cloneNode(true));
                     }
-                    // body overflow をロックされないように強制解除
                     if (document.body && document.body.style.overflow === 'hidden') {
                         document.body.style.overflow = 'auto';
                     }
                 });
                 if (document.body) {
-                    observer.observe(document.body, { childList: true, subtree: true, attributes: true });
+                    observer.observe(document.body, { childList: true, subtree: true });
                 } else {
                     document.addEventListener('DOMContentLoaded', function() {
-                        observer.observe(document.body, { childList: true, subtree: true, attributes: true });
+                        observer.observe(document.body, { childList: true, subtree: true });
                     });
                 }
             })();
