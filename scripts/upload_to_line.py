@@ -266,37 +266,20 @@ def wait_for_login(page: Page, status: UploadStatus, timeout: int = 180) -> Opti
     page.bring_to_front()
     status.update("ログイン", "🔓 開いたブラウザでLINEにログインしてください", 10)
 
-    # ポーリングで待機
+    # ポーリングで待機（ページ遷移は一切行わず、URLの変化だけを監視する）
     elapsed = 0
-    interval = 2
+    interval = 3
     while elapsed < timeout:
         time.sleep(interval)
         elapsed += interval
 
-        # 全ページをチェック
-        logged_in = _find_logged_in_page()
-        if logged_in:
-            _wait_for_page_ready(logged_in)
-            status.update("ログイン", "✅ ログイン完了！", 20)
-            return logged_in
-
-        # ログインでリダイレクトされた可能性（URL変化チェック）
-        try:
-            current_url = page.url
-            if "creator.line.me" in current_url and "/signup/" not in current_url and "/auth" not in current_url:
-                # ログインページ以外のcreator.line.meにいる → ダッシュボードへ遷移を試みる
-                if _try_navigate_to_dashboard(page, status):
-                    status.update("ログイン", "✅ ログイン完了！", 20)
-                    return page
-        except Exception:
-            pass
-
-        # 新しいページが開かれた場合に対応（OAuthポップアップ閉じた後）
+        # 全ページのURLをチェック（goto等のページ遷移は絶対に行わない）
         try:
             for p in context.pages:
                 try:
                     url = p.url
-                    if "creator.line.me" in url and "/my/" in url:
+                    # ダッシュボード到達 = ログイン成功
+                    if "/my/" in url and "access.line.me" not in url:
                         _wait_for_page_ready(p)
                         status.update("ログイン", "✅ ログイン完了！", 20)
                         return p
@@ -305,17 +288,10 @@ def wait_for_login(page: Page, status: UploadStatus, timeout: int = 180) -> Opti
         except Exception:
             pass
 
-        # 10秒ごとにデバッグ情報
+        # 10秒ごとにステータス更新
         if elapsed % 10 == 0:
-            urls = []
-            for p in context.pages:
-                try:
-                    urls.append(p.url[:60])
-                except Exception:
-                    urls.append("(error)")
             remaining = timeout - elapsed
             status.update("ログイン", f"🔓 ブラウザでログインしてください（残り{remaining}秒）", 10)
-            status.update("デバッグ", f"ページURL: {urls}")
 
     status.update("エラー", "⏰ ログインがタイムアウトしました。もう一度お試しください。")
     return None
@@ -1834,7 +1810,17 @@ def upload_to_line(
     user_data_dir = project_root / ".browser_data"
     user_data_dir.mkdir(exist_ok=True)
 
-    # 前回のブラウザが異常終了した場合のロックファイルを削除
+    # 前回のブラウザが異常終了した場合の残留プロセスとロックファイルを削除
+    import subprocess
+    try:
+        # .browser_data を使用している残留Chromiumプロセスを終了
+        subprocess.run(
+            ["pkill", "-f", str(user_data_dir)],
+            capture_output=True, timeout=5,
+        )
+        time.sleep(1)
+    except Exception:
+        pass
     for lock_name in ["SingletonLock", "SingletonCookie", "SingletonSocket"]:
         lock_path = user_data_dir / lock_name
         try:
