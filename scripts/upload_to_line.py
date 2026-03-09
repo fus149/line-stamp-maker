@@ -1898,6 +1898,7 @@ def upload_to_line(
 
     status.update("開始", "ブラウザを起動中...", 2)
 
+
     with sync_playwright() as p:
         context = _launch_browser(p, user_data_dir, status)
         status.update("開始", "ブラウザ起動成功", 3)
