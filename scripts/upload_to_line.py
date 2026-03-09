@@ -1878,6 +1878,12 @@ def upload_to_line(
 
         for attempt in range(3):
             _cleanup_browser_locks(data_dir)
+            # システムChromeを優先（ログインセッション互換性のため）
+            try:
+                return p.chromium.launch_persistent_context(channel="chrome", **launch_kwargs)
+            except Exception:
+                pass
+            # Chromeが使えない場合はPlaywright Chromiumにフォールバック
             try:
                 return p.chromium.launch_persistent_context(**launch_kwargs)
             except Exception as e:
