@@ -230,11 +230,12 @@ def wait_for_login(page: Page, status: UploadStatus, timeout: int = 180) -> Opti
     context = page.context
 
     def _find_logged_in_page() -> Optional[Page]:
-        """全ページを確認してログイン済みのページを返す"""
+        """全ページを確認してログイン済み（ダッシュボード）のページを返す"""
         for p in context.pages:
             try:
                 url = p.url
-                if "/my/" in url:
+                # /my/ がURLパス部分にある＋access.line.meではない（クエリパラメータの誤判定防止）
+                if "/my/" in url and "access.line.me" not in url:
                     return p
             except Exception:
                 continue
@@ -1810,43 +1811,69 @@ def upload_to_line(
     user_data_dir = project_root / ".browser_data"
     user_data_dir.mkdir(exist_ok=True)
 
-    # 前回のブラウザが異常終了した場合の残留プロセスとロックファイルを削除
-    import subprocess
-    try:
-        # .browser_data を使用している残留Chromiumプロセスを終了
-        subprocess.run(
-            ["pkill", "-f", str(user_data_dir)],
-            capture_output=True, timeout=5,
-        )
-        time.sleep(1)
-    except Exception:
-        pass
-    for lock_name in ["SingletonLock", "SingletonCookie", "SingletonSocket"]:
-        lock_path = user_data_dir / lock_name
+    def _cleanup_browser_locks(data_dir: Path):
+        """ブラウザのロックファイルと残留プロセスを確実に削除する。"""
+        import subprocess, os, signal
+
+        # 1. .browser_data を使用している残留Chromiumプロセスを終了
         try:
-            lock_path.unlink(missing_ok=True)
-        except OSError:
+            result = subprocess.run(
+                ["lsof", "-t", str(data_dir / "SingletonLock")],
+                capture_output=True, text=True, timeout=5,
+            )
+            for pid_str in result.stdout.strip().split():
+                try:
+                    os.kill(int(pid_str), signal.SIGTERM)
+                except (ValueError, ProcessLookupError, PermissionError):
+                    pass
+        except Exception:
             pass
 
-    with sync_playwright() as p:
-        # システムのChromeを使用（ユーザーが慣れたブラウザ）
-        # channel="chrome"により、普段のChromeと同じ見た目で開く
-        # persistent_contextでログイン状態を保存（次回以降は自動ログイン）
+        # 2. pkill でブラウザプロセスも念のため終了
+        try:
+            subprocess.run(["pkill", "-f", str(data_dir)], capture_output=True, timeout=5)
+        except Exception:
+            pass
+
+        time.sleep(1)
+
+        # 3. ロックファイルを削除（シンボリックリンク対応）
+        import os as _os
+        for lock_name in ["SingletonLock", "SingletonCookie", "SingletonSocket"]:
+            lock_full = data_dir / lock_name
+            try:
+                _os.unlink(str(lock_full))
+            except FileNotFoundError:
+                pass
+            except OSError:
+                pass
+
+    def _launch_browser(p, data_dir: Path, status: UploadStatus):
+        """ブラウザを起動する。失敗時はロック削除してリトライ。"""
         launch_kwargs = {
-            "user_data_dir": str(user_data_dir),
+            "user_data_dir": str(data_dir),
             "headless": False,
             "locale": "ja-JP",
             "no_viewport": True,
             "args": ["--start-maximized"],
         }
-        # システムChromeがあればそちらを使用（より馴染みのあるUI）
-        try:
-            context = p.chromium.launch_persistent_context(
-                channel="chrome", **launch_kwargs
-            )
-        except Exception:
-            # Chromeが無い場合はPlaywright Chromiumにフォールバック
-            context = p.chromium.launch_persistent_context(**launch_kwargs)
+
+        for attempt in range(3):
+            _cleanup_browser_locks(data_dir)
+            try:
+                return p.chromium.launch_persistent_context(**launch_kwargs)
+            except Exception as e:
+                error_msg = str(e)
+                status.update("デバッグ", f"ブラウザ起動試行{attempt+1}/3 失敗: {error_msg[:100]}")
+                if attempt < 2:
+                    time.sleep(2)
+                else:
+                    raise RuntimeError(f"ブラウザを起動できません: {error_msg[:200]}")
+
+    _cleanup_browser_locks(user_data_dir)
+
+    with sync_playwright() as p:
+        context = _launch_browser(p, user_data_dir, status)
 
         # persistent context はデフォルトで空ページを1つ作る。
         # 不要な空ページを閉じてから新しいページを作る。
