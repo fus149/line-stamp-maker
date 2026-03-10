@@ -48,20 +48,24 @@ class UploadStatus:
             self.status_file.write_text(json.dumps(data, ensure_ascii=False), encoding="utf-8")
 
     def save_screenshot(self, page: Page, name: str):
-        """デバッグ用スクリーンショットを保存する。"""
+        """デバッグ用スクリーンショットを保存する。
+        ブラウザ最小化時はスクリーンショットがタイムアウトするため、
+        短いタイムアウト(5秒)を設定して処理を止めないようにする。
+        """
         if self.debug_dir:
             self.debug_dir.mkdir(parents=True, exist_ok=True)
             path = self.debug_dir / f"debug_{name}.png"
             try:
-                page.screenshot(path=str(path), full_page=False)
+                page.screenshot(path=str(path), full_page=False, timeout=5000)
                 self.update("デバッグ", f"スクリーンショット保存: {path.name}")
-            except Exception as e:
-                self.update("デバッグ", f"スクリーンショット保存失敗: {e}")
+            except Exception:
+                # ブラウザ最小化時等、スクリーンショットが取れない場合は静かにスキップ
+                pass
 
     def dump_page_info(self, page: Page, label: str):
         """ページのURL、タイトル、主要要素をログに記録する。"""
         try:
-            url = page.url
+            url = page.evaluate("window.location.href")
             title = page.title()
             self.update("デバッグ", f"[{label}] URL={url}")
             self.update("デバッグ", f"[{label}] Title={title}")
@@ -1338,7 +1342,9 @@ def submit_creation_form(page: Page, status: UploadStatus) -> bool:
     """
     status.update("自動処理中", "スタンプ情報を保存中...", 55)
 
-    url_before = page.url
+    # 重要: page.url はSPAでは古い値を返すことがある
+    # → _get_real_url() (window.location.href) を使う
+    url_before = _get_real_url(page)
 
     # ページ下部にスクロール
     try:
@@ -1543,7 +1549,11 @@ def submit_creation_form(page: Page, status: UploadStatus) -> bool:
     time.sleep(5)
     _wait_for_page_ready(page)
 
-    new_url = page.url
+    # 重要: page.url はSPAでは古い値を返すことがある
+    # 証拠(session ff43d4f5, 18be03b0): 保存成功(sticker/43404922)なのに
+    # page.urlが古いままで失敗と判定されていた
+    new_url = _get_real_url(page)
+    status.update("デバッグ", f"保存後URL: {new_url}")
 
     # 405 Method Not Allowed 検知 → GETで再読み込み
     # 証拠(session d1f7b5d4): form.submit() → POST → 405
@@ -1554,7 +1564,7 @@ def submit_creation_form(page: Page, status: UploadStatus) -> bool:
             status.update("デバッグ", f"405検知。GETで再読み込み: {new_url}")
             page.goto(new_url, timeout=15000)
             _wait_for_page_ready(page)
-            new_url = page.url
+            new_url = _get_real_url(page)
             status.update("デバッグ", f"再読み込み後: {new_url}")
     except Exception as e:
         status.update("デバッグ", f"405リカバリ失敗: {e}")
@@ -2185,14 +2195,15 @@ def upload_to_line(
                 status.save_screenshot(page, "99_final_error")
                 return False
 
-            # ナビゲーション完了後にブラウザを最小化
-            _hide_browser(page, status)
-
             # Step 4: スタンプ情報入力
             fill_sticker_info(page, title, description, status)
 
             # Step 5: フォーム保存（新規登録フォームを送信→編集ページへ遷移）
             form_saved = submit_creation_form(page, status)
+
+            # フォーム入力・保存後にブラウザを最小化
+            # （入力・保存中はスクリーンショットが必要なため、最小化は後回しにする）
+            _hide_browser(page, status)
             if not form_saved:
                 # 保存ボタンが見つからない = フォームが正しく表示されていない
                 # 失敗したまま続行すると「完了」と表示されるだけで実際には登録されない
