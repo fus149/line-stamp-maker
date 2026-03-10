@@ -248,6 +248,8 @@ async def upload_to_line_api(
     session_id: str,
     title: str = Form("Pet Stickers"),
     description: str = Form("Cute pet stickers"),
+    email: str = Form(""),
+    password: str = Form(""),
 ):
     """Playwrightでブラウザを開き、LINE Creators Marketに自動登録する。"""
     output_dir = SESSIONS_DIR / session_id / "output"
@@ -276,7 +278,7 @@ async def upload_to_line_api(
             status_file.write_text(json.dumps(error_data, ensure_ascii=False), encoding="utf-8")
             return
         try:
-            upload_to_line(output_dir, title, description, interactive=False, status_file=status_file)
+            upload_to_line(output_dir, title, description, interactive=False, status_file=status_file, email=email, password=password)
         except Exception as e:
             # スレッド内の未捕捉エラーをステータスファイルに記録
             error_data = {
@@ -294,7 +296,7 @@ async def upload_to_line_api(
 
     return {
         "status": "started",
-        "message": "QRコードを準備しています。LINEアプリでスキャンしてログインしてください。",
+        "message": "LINEに自動ログインしています。しばらくお待ちください。",
         "session_id": session_id,
     }
 

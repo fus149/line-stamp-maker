@@ -195,7 +195,44 @@ def _capture_qr_code(page: Page, status: UploadStatus) -> bool:
         return False
 
 
-def _switch_to_qr_login(page: Page, status: UploadStatus):
+def _fill_login_form(page: Page, email: str, password: str, status: UploadStatus) -> bool:
+    """access.line.me のログインフォームにメール/パスワードを自動入力してログインする。"""
+    try:
+        # メール入力欄を探す
+        email_input = page.locator('input[type="email"], input[name="tid"], input[placeholder*="メール"], input[placeholder*="email" i]').first
+        if not email_input.is_visible(timeout=5000):
+            status.update("デバッグ", "メール入力欄が見つかりません")
+            return False
+
+        # パスワード入力欄を探す
+        password_input = page.locator('input[type="password"]').first
+        if not password_input.is_visible(timeout=3000):
+            status.update("デバッグ", "パスワード入力欄が見つかりません")
+            return False
+
+        # 入力
+        email_input.fill(email)
+        time.sleep(0.5)
+        password_input.fill(password)
+        time.sleep(0.5)
+
+        # ログインボタンをクリック
+        login_btn = page.locator('button[type="submit"], button:has-text("ログイン"), button:has-text("Log in")').first
+        if login_btn.is_visible(timeout=3000):
+            login_btn.click()
+            status.update("ログイン", "🔐 ログイン中...", 12)
+            time.sleep(3)
+            _wait_for_page_ready(page)
+            return True
+        else:
+            status.update("デバッグ", "ログインボタンが見つかりません")
+            return False
+    except Exception as e:
+        status.update("デバッグ", f"自動ログイン失敗: {e}")
+        return False
+
+
+
     """access.line.me のログインページで「QRコードログイン」に切り替える。
     デフォルトはメール/パスワード表示のため、QRコード表示にはクリックが必要。
     """
@@ -351,7 +388,7 @@ def _find_dashboard_page(context: BrowserContext, status: UploadStatus) -> Optio
     return None
 
 
-def wait_for_login(page: Page, status: UploadStatus, timeout: int = 300) -> Optional[Page]:
+def wait_for_login(page: Page, status: UploadStatus, timeout: int = 300, email: str = "", password: str = "") -> Optional[Page]:
     """ユーザーがログインするまで待機。ログイン済みのダッシュボードページを返す。"""
     context = page.context
 
@@ -423,20 +460,39 @@ def wait_for_login(page: Page, status: UploadStatus, timeout: int = 300) -> Opti
             status.update("ログイン", "✅ ログイン済み", 20)
             return creator
 
-    # ケース3: ログインページ → QRコードをキャプチャしてスマホに表示
-    status.update("デバッグ", "ログインページ検出 → QRコード画面に切り替えます")
-
-    # 「QRコードログイン」リンクをクリックしてQR表示画面に切り替え
-    # access.line.me はデフォルトでメール/パスワードフォームを表示するため、
-    # QRコードを表示するにはこのリンクをクリックする必要がある
-    _switch_to_qr_login(page, status)
-
-    # QRコードをキャプチャしてスマホUIに表示
-    qr_captured = _capture_qr_code(page, status)
-    if qr_captured:
-        status.update("QRコード", "📱 LINEアプリでQRコードをスキャンしてログインしてください", 10)
+    # ケース3: ログインページ → メール/パスワードで自動ログイン
+    if email and password:
+        status.update("ログイン", "🔐 メール/パスワードで自動ログイン中...", 10)
+        login_ok = _fill_login_form(page, email, password, status)
+        if login_ok:
+            # ログイン後のリダイレクトを待つ
+            time.sleep(3)
+            _wait_for_page_ready(page)
+            # ダッシュボードに到達したか確認
+            dashboard = _check_all_pages_for_dashboard()
+            if dashboard:
+                status.update("ログイン", "✅ ログイン完了！", 20)
+                return dashboard
+            # creator.line.meにいる場合
+            creator = _check_all_pages_for_creator_site()
+            if creator:
+                if _try_navigate_to_dashboard(creator, status):
+                    status.update("ログイン", "✅ ログイン完了！", 20)
+                    return creator
+            # まだログインページにいる場合（パスワード間違い等）
+            current_url = _get_real_url(page)
+            if _is_on_login_page(current_url):
+                status.update("エラー", "❌ ログインに失敗しました。メールアドレスまたはパスワードを確認してください。", 0)
+                return None
     else:
-        status.update("QRコード", "🔓 LINEにログインしてください（QRコード取得中...）", 10)
+        # メール/パスワードが提供されていない場合はQRコードにフォールバック
+        status.update("デバッグ", "ログインページ検出 → QRコード画面に切り替えます")
+        _switch_to_qr_login(page, status)
+        qr_captured = _capture_qr_code(page, status)
+        if qr_captured:
+            status.update("QRコード", "📱 LINEアプリでQRコードをスキャンしてログインしてください", 10)
+        else:
+            status.update("QRコード", "🔓 LINEにログインしてください（QRコード取得中...）", 10)
 
     # === Step 3: ポーリングで待機 ===
     elapsed = 0
@@ -2161,6 +2217,8 @@ def upload_to_line(
     description: str = "Cute pet stickers",
     interactive: bool = True,
     status_file: Optional[Path] = None,
+    email: str = "",
+    password: str = "",
 ) -> bool:
     """LINE Creators Marketにスタンプを自動登録する。"""
     output_dir = Path(output_dir)
@@ -2317,11 +2375,10 @@ def upload_to_line(
 
         try:
             # Step 1: ログイン
-            logged_in_page = wait_for_login(page, status)
+            logged_in_page = wait_for_login(page, status, email=email, password=password)
             if logged_in_page is None:
                 return False
             page = logged_in_page
-            # ブラウザは wait_for_login() 内でログイン確認直後に最小化済み
 
             # ダッシュボードで「新規登録」のhrefを取得
             status.update("自動処理中", "ログイン完了！新規登録ページを探しています...", 22)
