@@ -54,7 +54,11 @@ def load_templates() -> list[str]:
 
 @app.get("/")
 async def index(request: Request):
-    return templates.TemplateResponse("index.html", {"request": request, "v": CACHE_BUST})
+    response = templates.TemplateResponse("index.html", {"request": request, "v": CACHE_BUST})
+    # ngrok経由でもキャッシュされないようにする
+    response.headers["Cache-Control"] = "no-cache, no-store, must-revalidate"
+    response.headers["Pragma"] = "no-cache"
+    return response
 
 
 @app.get("/api/templates")
