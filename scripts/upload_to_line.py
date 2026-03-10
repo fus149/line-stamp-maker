@@ -297,12 +297,14 @@ def wait_for_login(page: Page, status: UploadStatus, timeout: int = 300) -> Opti
     # ケース1: 直接ダッシュボードにリダイレクトされた（ログイン済み）
     dashboard = _check_all_pages_for_dashboard()
     if dashboard:
+        _hide_browser(dashboard, status)  # 自動ログイン → 即座に最小化
         status.update("ログイン", "✅ 前回のログインが有効です（自動ログイン）", 20)
         return dashboard
 
     # ケース2: creator.line.meにいるがダッシュボードではない → ダッシュボードへ誘導
     creator = _check_all_pages_for_creator_site()
     if creator:
+        _hide_browser(creator, status)  # ログイン済み → 即座に最小化
         status.update("デバッグ", "creator.line.me検出。ダッシュボードへ誘導中...")
         if _try_navigate_to_dashboard(creator, status):
             status.update("ログイン", "✅ ログイン済み", 20)
@@ -327,6 +329,7 @@ def wait_for_login(page: Page, status: UploadStatus, timeout: int = 300) -> Opti
                 # ダッシュボードに到達した
                 if "/my/" in url and "access.line.me" not in url:
                     _wait_for_page_ready(p)
+                    _hide_browser(p, status)  # 手動ログイン完了 → 即座に最小化
                     status.update("ログイン", "✅ ログイン完了！", 20)
                     return p
                 # creator.line.meにいる（ログイン後リダイレクト）がダッシュボードではない
@@ -336,6 +339,7 @@ def wait_for_login(page: Page, status: UploadStatus, timeout: int = 300) -> Opti
                         status.update("デバッグ", f"ログイン検出: {url[:100]}")
                     # ダッシュボードへナビゲート（1回だけ）
                     try:
+                        _hide_browser(p, status)  # ログイン検出 → 即座に最小化
                         p.goto("https://creator.line.me/my/sticker/", timeout=15000)
                         _wait_for_page_ready(p)
                         new_url = _get_real_url(p)
@@ -2147,9 +2151,7 @@ def upload_to_line(
             if logged_in_page is None:
                 return False
             page = logged_in_page
-
-            # ログイン完了 → すぐにブラウザを最小化（お客様に操作画面を見せない）
-            _hide_browser(page, status)
+            # ブラウザは wait_for_login() 内でログイン確認直後に最小化済み
 
             # ダッシュボードで「新規登録」のhrefを取得
             status.update("自動処理中", "ログイン完了！新規登録ページを探しています...", 22)
