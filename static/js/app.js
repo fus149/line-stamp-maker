@@ -52,6 +52,26 @@ const FONT_FAMILY_MAP = {
 const $ = (sel) => document.querySelector(sel);
 const $$ = (sel) => [...document.querySelectorAll(sel)];
 
+// --- ngrok 対応画像読み込み ---
+// ngrok 無料版はブラウザからのリクエストに警告ページを返すため、
+// <img> タグの src 直接指定では画像が読み込めない。
+// fetch() で ngrok-skip-browser-warning ヘッダーを付けて取得し、blob URL に変換する。
+async function loadImage(imgEl, url) {
+  try {
+    const res = await fetch(url, {
+      headers: { "ngrok-skip-browser-warning": "true" },
+    });
+    if (!res.ok) throw new Error(`HTTP ${res.status}`);
+    const blob = await res.blob();
+    if (imgEl._blobUrl) URL.revokeObjectURL(imgEl._blobUrl);
+    const blobUrl = URL.createObjectURL(blob);
+    imgEl._blobUrl = blobUrl;
+    imgEl.src = blobUrl;
+  } catch (e) {
+    console.error("Image load failed:", url, e);
+  }
+}
+
 // --- Step Navigation ---
 function goToStep(n) {
   state.currentStep = n;
@@ -137,7 +157,11 @@ async function createThumbnailUrl(file) {
   try {
     const formData = new FormData();
     formData.append("file", file);
-    const res = await fetch("/api/preview-image", { method: "POST", body: formData });
+    const res = await fetch("/api/preview-image", {
+      method: "POST",
+      body: formData,
+      headers: { "ngrok-skip-browser-warning": "true" },
+    });
     if (res.ok) {
       const blob = await res.blob();
       return URL.createObjectURL(blob);
@@ -236,7 +260,11 @@ async function uploadFiles() {
     $("#btn-next-1").disabled = true;
     $("#btn-next-1").textContent = "アップロード中...";
 
-    const res = await fetch("/api/upload", { method: "POST", body: formData });
+    const res = await fetch("/api/upload", {
+      method: "POST",
+      body: formData,
+      headers: { "ngrok-skip-browser-warning": "true" },
+    });
     const data = await res.json();
 
     if (!res.ok) throw new Error(data.error || "アップロードに失敗しました");
@@ -280,7 +308,9 @@ async function loadTemplates() {
     return;
   }
 
-  const res = await fetch("/api/templates");
+  const res = await fetch("/api/templates", {
+    headers: { "ngrok-skip-browser-warning": "true" },
+  });
   const data = await res.json();
   state.templates = data.templates;
   renderTemplateGrid();
@@ -355,7 +385,11 @@ async function generateStamps() {
     formData.append("mode", state.mode);
     formData.append("messages", getMessages());
 
-    const res = await fetch("/api/generate", { method: "POST", body: formData });
+    const res = await fetch("/api/generate", {
+      method: "POST",
+      body: formData,
+      headers: { "ngrok-skip-browser-warning": "true" },
+    });
     const data = await res.json();
 
     if (!res.ok) throw new Error(data.error || "生成に失敗しました");
@@ -396,9 +430,8 @@ function showResult(data) {
     div.addEventListener("click", () => openEditor(i));
 
     const img = document.createElement("img");
-    img.src = `/api/stamp/${state.sessionId}/${filename}`;
     img.alt = filename;
-    img.loading = "lazy";
+    loadImage(img, `/api/stamp/${state.sessionId}/${filename}`);
 
     const badge = document.createElement("span");
     badge.className = "edit-badge";
@@ -469,6 +502,7 @@ function initLineUpload() {
       const res = await fetch(`/api/upload-to-line/${state.sessionId}`, {
         method: "POST",
         body: formData,
+        headers: { "ngrok-skip-browser-warning": "true" },
       });
       const data = await res.json();
       if (!res.ok) throw new Error(data.error);
@@ -501,7 +535,9 @@ function startStatusPolling() {
 
   statusPollTimer = setInterval(async () => {
     try {
-      const res = await fetch(`/api/upload-status/${state.sessionId}`);
+      const res = await fetch(`/api/upload-status/${state.sessionId}`, {
+        headers: { "ngrok-skip-browser-warning": "true" },
+      });
       const data = await res.json();
       networkErrorCount = 0; // ネットワーク成功でリセット
 
@@ -556,10 +592,7 @@ function startStatusPolling() {
         if (qrDisplay && qrImg) {
           qrDisplay.hidden = false;
           // キャッシュバスターでQR画像を更新（30秒ごとにバックエンドが新画像を保存）
-          const newSrc = `/api/qr-code/${state.sessionId}?t=${Date.now()}`;
-          if (qrImg.src !== newSrc) {
-            qrImg.src = newSrc;
-          }
+          loadImage(qrImg, `/api/qr-code/${state.sessionId}?t=${Date.now()}`);
         }
         // タイトルテキストを更新
         const loginTitle = $("#line-login-title");
@@ -649,7 +682,9 @@ function startStatusPolling() {
 
 async function loadDebugScreenshots() {
   try {
-    const res = await fetch(`/api/debug-screenshots/${state.sessionId}`);
+    const res = await fetch(`/api/debug-screenshots/${state.sessionId}`, {
+      headers: { "ngrok-skip-browser-warning": "true" },
+    });
     const data = await res.json();
     const container = $("#debug-screenshots");
     if (!container || !data.screenshots || data.screenshots.length === 0) return;
@@ -658,8 +693,8 @@ async function loadDebugScreenshots() {
     grid.innerHTML = "";
     for (const name of data.screenshots) {
       const img = document.createElement("img");
-      img.src = `/api/debug-screenshots/${state.sessionId}/${name}`;
       img.alt = name;
+      loadImage(img, `/api/debug-screenshots/${state.sessionId}/${name}`);
       img.title = name;
       img.style.maxWidth = "300px";
       img.style.border = "1px solid #ccc";
@@ -860,26 +895,46 @@ function openEditor(index) {
   // base画像（テキストなし版）をCanvasにロード。なければ通常画像にフォールバック
   const canvas = $("#editor-canvas");
   const ctx = canvas.getContext("2d");
-  const img = new Image();
-  img.crossOrigin = "anonymous";
-  img.onload = () => {
-    ctx.clearRect(0, 0, 370, 320);
-    ctx.drawImage(img, 0, 0, 370, 320);
-    pushUndo();
-  };
   const baseName = state.editingFilename.replace(".png", "_base.png");
-  img.onerror = () => {
-    // base画像がない場合（旧セッション）は通常画像を読み込む
-    const fallback = new Image();
-    fallback.crossOrigin = "anonymous";
-    fallback.onload = () => {
-      ctx.clearRect(0, 0, 370, 320);
-      ctx.drawImage(fallback, 0, 0, 370, 320);
-      pushUndo();
-    };
-    fallback.src = `/api/stamp/${state.sessionId}/${state.editingFilename}?t=${Date.now()}`;
-  };
-  img.src = `/api/stamp/${state.sessionId}/${baseName}?t=${Date.now()}`;
+
+  async function loadEditorImage() {
+    try {
+      // まず base 画像を試す
+      const baseRes = await fetch(`/api/stamp/${state.sessionId}/${baseName}?t=${Date.now()}`, {
+        headers: { "ngrok-skip-browser-warning": "true" },
+      });
+      if (!baseRes.ok) throw new Error("base not found");
+      const baseBlob = await baseRes.blob();
+      const baseUrl = URL.createObjectURL(baseBlob);
+      const img = new Image();
+      img.crossOrigin = "anonymous";
+      img.onload = () => {
+        ctx.clearRect(0, 0, 370, 320);
+        ctx.drawImage(img, 0, 0, 370, 320);
+        URL.revokeObjectURL(baseUrl);
+        pushUndo();
+      };
+      img.src = baseUrl;
+    } catch {
+      // base 画像がない場合は通常画像にフォールバック
+      const res = await fetch(`/api/stamp/${state.sessionId}/${state.editingFilename}?t=${Date.now()}`, {
+        headers: { "ngrok-skip-browser-warning": "true" },
+      });
+      if (!res.ok) return;
+      const blob = await res.blob();
+      const url = URL.createObjectURL(blob);
+      const fallback = new Image();
+      fallback.crossOrigin = "anonymous";
+      fallback.onload = () => {
+        ctx.clearRect(0, 0, 370, 320);
+        ctx.drawImage(fallback, 0, 0, 370, 320);
+        URL.revokeObjectURL(url);
+        pushUndo();
+      };
+      fallback.src = url;
+    }
+  }
+  loadEditorImage();
 
   // ツールをリセット
   state.activeTool = "eraser";
@@ -1172,7 +1227,7 @@ async function saveEditedStamp() {
 
     const res = await fetch(
       `/api/stamp/${state.sessionId}/${state.editingFilename}`,
-      { method: "PUT", body: formData }
+      { method: "PUT", body: formData, headers: { "ngrok-skip-browser-warning": "true" } }
     );
 
     if (!res.ok) {
@@ -1191,7 +1246,7 @@ async function saveEditedStamp() {
     // サムネイルを更新（キャッシュバスト）
     const thumb = $(`#result-grid .result-item[data-index="${state.editingIndex}"] img`);
     if (thumb) {
-      thumb.src = `/api/stamp/${state.sessionId}/${state.editingFilename}?t=${Date.now()}`;
+      loadImage(thumb, `/api/stamp/${state.sessionId}/${state.editingFilename}?t=${Date.now()}`);
     }
 
     closeEditor();
