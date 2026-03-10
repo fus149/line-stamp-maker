@@ -113,6 +113,51 @@ def _hide_browser(page: Page, status: UploadStatus):
         status.update("デバッグ", f"ブラウザ非表示失敗（動作に影響なし）: {e}")
 
 
+def _capture_qr_code(page: Page, status: UploadStatus) -> bool:
+    """access.line.meのログインページからQRコードをキャプチャしてセッションディレクトリに保存。
+    スマホユーザーがLINEアプリでスキャンしてログインできるようにする。
+    戻り値: QRコード画像の保存に成功したらTrue。
+    """
+    if not status.status_file:
+        return False
+
+    qr_path = status.status_file.parent / "qr_code.png"
+
+    try:
+        # LINEログインページのQRコード要素を探す
+        # access.line.me のQRコードは複数のセレクタで配置される可能性がある
+        qr_selectors = [
+            "div.qr_code img",           # QRコード画像（imgタグ）
+            "div.qr_code canvas",         # QRコード（canvasタグ）
+            "div.qr_code_area img",       # 別パターン
+            "div.qr_code_area canvas",    # 別パターン
+            "#qr_code img",              # ID指定パターン
+            "#qr_code canvas",           # ID指定パターン
+            "div[class*='qr'] img",      # クラス名にqrを含むdiv内のimg
+            "div[class*='qr'] canvas",   # クラス名にqrを含むdiv内のcanvas
+            "img[alt*='QR']",            # altにQRを含むimg
+        ]
+
+        for selector in qr_selectors:
+            try:
+                el = page.locator(selector).first
+                if el.is_visible(timeout=1000):
+                    el.screenshot(path=str(qr_path), timeout=5000)
+                    status.update("デバッグ", f"QRコード取得成功: selector={selector}")
+                    return True
+            except Exception:
+                continue
+
+        # フォールバック: QRコード要素が特定できない場合、ページ全体のスクリーンショット
+        status.update("デバッグ", "QRコード要素が見つからないため、ページ全体をキャプチャ")
+        page.screenshot(path=str(qr_path), full_page=False, timeout=5000)
+        return True
+
+    except Exception as e:
+        status.update("デバッグ", f"QRコード取得失敗: {e}")
+        return False
+
+
 def _wait_for_page_ready(page: Page, timeout: int = 10):
     """ページの読み込み完了を待つ。"""
     try:
@@ -310,30 +355,38 @@ def wait_for_login(page: Page, status: UploadStatus, timeout: int = 300) -> Opti
             status.update("ログイン", "✅ ログイン済み", 20)
             return creator
 
-    # ケース3: ログインページ → ユーザーの手動ログインを待つ
-    # ブラウザを画面外から画面内に移動して表示（ユーザーがPCでログインできるように）
-    try:
-        cdp = page.context.new_cdp_session(page)
-        window = cdp.send("Browser.getWindowForTarget")
-        window_id = window["windowId"]
-        cdp.send("Browser.setWindowBounds", {
-            "windowId": window_id,
-            "bounds": {"windowState": "normal", "left": 100, "top": 100, "width": 800, "height": 600}
-        })
-        cdp.detach()
-    except Exception:
-        pass
-    page.bring_to_front()
-    status.update("ログイン", "🔓 パソコンのChromeでLINEにログインしてください", 10)
+    # ケース3: ログインページ → QRコードをキャプチャしてスマホに表示
+    # ブラウザはPC画面外のまま（ユーザーに見せない）
+    status.update("デバッグ", "ログインページ検出 → QRコードをキャプチャします")
+
+    # QRコードをキャプチャしてスマホUIに表示
+    qr_captured = _capture_qr_code(page, status)
+    if qr_captured:
+        status.update("QRコード", "📱 LINEアプリでQRコードをスキャンしてログインしてください", 10)
+    else:
+        status.update("QRコード", "🔓 LINEにログインしてください（QRコード取得中...）", 10)
 
     # === Step 3: ポーリングで待機 ===
     elapsed = 0
     interval = 3
     login_detected = False
     pages_empty_count = 0
+    last_qr_capture = 0  # 最後のQRキャプチャ時刻（elapsed秒）
+    QR_REFRESH_INTERVAL = 30  # QRコード更新間隔（秒）
     while elapsed < timeout:
         time.sleep(interval)
         elapsed += interval
+
+        # QRコードを定期的に再取得（有効期限切れ対策）
+        if elapsed - last_qr_capture >= QR_REFRESH_INTERVAL:
+            try:
+                current_url = _get_real_url(page)
+                if _is_on_login_page(current_url):
+                    _capture_qr_code(page, status)
+                    last_qr_capture = elapsed
+                    status.update("デバッグ", f"QRコード再取得（{elapsed}秒経過）")
+            except Exception:
+                pass
 
         # ページ一覧を安全に取得
         all_pages = []
@@ -353,8 +406,10 @@ def wait_for_login(page: Page, status: UploadStatus, timeout: int = 300) -> Opti
                     recovery_page.goto(LOGIN_URL, timeout=15000)
                     _wait_for_page_ready(recovery_page)
                     page = recovery_page
-                    page.bring_to_front()
                     status.update("デバッグ", "ページをリカバリーしました")
+                    # リカバリー後にQRコードを再取得
+                    _capture_qr_code(page, status)
+                    last_qr_capture = elapsed
                     continue
                 except Exception as e:
                     status.update("デバッグ", f"リカバリー失敗: {e}")
@@ -372,7 +427,7 @@ def wait_for_login(page: Page, status: UploadStatus, timeout: int = 300) -> Opti
                 # ダッシュボードに到達した
                 if "/my/" in url and "access.line.me" not in url:
                     _wait_for_page_ready(p)
-                    _hide_browser(p, status)  # 手動ログイン完了 → 即座に最小化
+                    _hide_browser(p, status)  # QRログイン完了 → 最小化
                     status.update("ログイン", "✅ ログイン完了！", 20)
                     return p
                 # creator.line.meにいる（ログイン後リダイレクト）がダッシュボードではない
@@ -397,16 +452,9 @@ def wait_for_login(page: Page, status: UploadStatus, timeout: int = 300) -> Opti
         # ステータス更新（15秒ごと）
         if elapsed % 15 == 0:
             remaining = timeout - elapsed
-            page_urls = []
-            for p in all_pages:
-                try:
-                    page_urls.append(_get_real_url(p)[:80])
-                except Exception:
-                    page_urls.append("(error)")
-            status.update("ログイン", f"🔓 パソコンのChromeでログインしてください（残り{remaining}秒）", 10)
-            status.update("デバッグ", f"ページURL: {page_urls}")
+            status.update("QRコード", f"📱 QRコードをスキャンしてログインしてください（残り{remaining}秒）", 10)
 
-    status.update("エラー", "⏰ ログインがタイムアウトしました。パソコンでLINEにログインしてからもう一度お試しください。")
+    status.update("エラー", "⏰ ログインがタイムアウトしました。もう一度お試しください。")
     return None
 
 

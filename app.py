@@ -284,6 +284,19 @@ async def upload_to_line_api(
     }
 
 
+@app.get("/api/qr-code/{session_id}")
+async def get_qr_code(session_id: str):
+    """LINEログイン用QRコード画像を返す（スマホ表示用）。"""
+    path = SESSIONS_DIR / session_id / "qr_code.png"
+    if not path.exists():
+        return JSONResponse({"error": "QRコードがまだ準備できていません"}, status_code=404)
+    return FileResponse(
+        path,
+        media_type="image/png",
+        headers={"Cache-Control": "no-cache, no-store, must-revalidate"},
+    )
+
+
 @app.get("/api/upload-status/{session_id}")
 async def get_upload_status(session_id: str):
     """LINE自動登録の進捗を返す。"""

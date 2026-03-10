@@ -195,8 +195,15 @@
               </div>
               <div class="line-login-prompt">
                 <div style="font-size: 48px; margin-bottom: 0.5rem;">🔐</div>
-                <h3 class="line-flow-title">Chromeでログインしてください</h3>
-                <p class="line-flow-desc">自動で開いたChromeブラウザでLINEにログインしてください。<br/>一度ログインすれば、次回からは自動でログインされます。</p>
+                <h3 class="line-flow-title" id="line-login-title">ログイン中...</h3>
+                <p class="line-flow-desc" id="line-login-desc">LINEアカウントの確認中です。しばらくお待ちください。</p>
+                <!-- QRコード表示エリア -->
+                <div id="qr-code-display" hidden>
+                  <div class="qr-code-wrap">
+                    <img id="qr-code-img" src="" alt="QRコード" />
+                  </div>
+                  <p class="qr-code-hint">LINEアプリの「QRコードリーダー」でスキャンしてください</p>
+                </div>
                 <div class="line-flow-note">
                   <p>💡 ログインが完了すると、この画面が自動で切り替わります</p>
                 </div>

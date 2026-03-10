@@ -543,13 +543,47 @@ function startStatusPolling() {
         waitingCount = 0; // 有効なステップが来たらリセット
       }
 
-      // ログイン完了後 → 待機画面に切り替え
+      // QRコード表示 → ログイン画面にQRコードを表示
+      if (data.step === "QRコード") {
+        const uploading = $("#line-uploading");
+        const waiting = $("#line-waiting");
+        if (uploading) uploading.hidden = false;
+        if (waiting) waiting.hidden = true;
+
+        // QRコード画像を表示
+        const qrDisplay = $("#qr-code-display");
+        const qrImg = $("#qr-code-img");
+        if (qrDisplay && qrImg) {
+          qrDisplay.hidden = false;
+          // キャッシュバスターでQR画像を更新（30秒ごとにバックエンドが新画像を保存）
+          const newSrc = `/api/qr-code/${state.sessionId}?t=${Date.now()}`;
+          if (qrImg.src !== newSrc) {
+            qrImg.src = newSrc;
+          }
+        }
+        // タイトルテキストを更新
+        const loginTitle = $("#line-login-title");
+        const loginDesc = $("#line-login-desc");
+        if (loginTitle) loginTitle.textContent = "QRコードでログイン";
+        if (loginDesc) loginDesc.textContent = "LINEアプリでQRコードをスキャンしてログインしてください";
+
+        const statusEl = $("#line-upload-status-text");
+        if (statusEl) {
+          statusEl.textContent = data.message;
+          statusEl.style.color = "";
+        }
+      }
+
+      // ログイン完了後 → 待機画面に切り替え（QRコード非表示にする）
       const waitingSteps = ["自動処理中", "画像アップ", "審査準備中", "開始", "ログイン"];
       if (waitingSteps.includes(data.step)) {
         const uploading = $("#line-uploading");
         const waiting = $("#line-waiting");
         if (uploading) uploading.hidden = true;
         if (waiting) waiting.hidden = false;
+        // QRコード表示を非表示にする
+        const qrDisplay = $("#qr-code-display");
+        if (qrDisplay) qrDisplay.hidden = true;
         // 待機画面のプログレスバーとステータステキスト更新
         const waitProgress = $("#line-waiting-progress");
         if (waitProgress) {

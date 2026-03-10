@@ -948,3 +948,32 @@ a:hover { text-decoration: underline; }
     justify-content: center;
   }
 }
+
+/* QRコード表示 */
+#qr-code-display {
+  text-align: center;
+  padding: 1rem 0;
+}
+
+.qr-code-wrap {
+  display: inline-block;
+  padding: 8px;
+  background: #fff;
+  border: 3px solid #06C755;
+  border-radius: 12px;
+  box-shadow: 0 2px 12px rgba(6, 199, 85, 0.15);
+}
+
+#qr-code-img {
+  display: block;
+  max-width: 250px;
+  width: 100%;
+  border-radius: 4px;
+}
+
+.qr-code-hint {
+  margin-top: 0.75rem;
+  font-size: 0.85rem;
+  color: #666;
+  line-height: 1.4;
+}
