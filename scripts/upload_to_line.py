@@ -971,84 +971,152 @@ def navigate_to_new_sticker(page: Page, status: UploadStatus, create_url: str = 
     status.save_screenshot(page, "04_after_new_reg_click")
     status.update("デバッグ", f"作成ページURL: {_get_real_url(page)}")
 
-    # キャンペーン等のモーダルがあれば閉じる（作成ページ上でもモーダルが出る）
-    _dismiss_all_modals(page, status)
-
     # ---- スタンプタイプ選択 ----
-    # /create ページでは スタンプ/絵文字/着せかえ の3つのボタンが表示される
-    # 重要: JavaScript el.click() は isTrusted=false のため Vue が無視する可能性
-    # → Playwright のネイティブ .click(force=True) を使う（isTrusted=true）
+    # /create ページでは画面下部にスタンプ/絵文字/着せかえの3つの緑ボタンが表示される
+    # 証拠(ユーザースクリーンショット): 3つの緑ボタンがページ下部に配置
+    # 最も確実な方法: ボタンのhrefを取得してpage.goto()で直接遷移
+    # （el.click()はSPAのisTrustedチェックで失敗する可能性があるためgoto()を優先）
     time.sleep(2)
     type_select_url = _get_real_url(page)
     sticker_type_selected = False
 
-    # 戦略1: Playwright ネイティブクリック（isTrusted=true、Vue対応）
+    # 戦略1（最優先）: hrefを抽出してpage.goto()で直接遷移
     try:
-        stamp_btn = page.get_by_text("スタンプ", exact=True)
-        stamp_count = stamp_btn.count()
-        status.update("デバッグ", f"「スタンプ」ボタン: {stamp_count}個")
-        for idx in range(stamp_count):
-            btn = stamp_btn.nth(idx)
-            try:
-                if not btn.is_visible(timeout=2000):
-                    continue
-                # サイドバーのリンクを除外（promotion等のhrefを含む場合）
-                href = btn.evaluate("e => (e.closest('a') || e).getAttribute('href') || ''")
-                text_full = (btn.evaluate("e => (e.closest('a') || e).textContent") or "").strip()
-                excluded = ['promotion', 'guideline', 'review', 'stats', 'studio']
-                if any(ex in href for ex in excluded):
-                    status.update("デバッグ", f"除外: href={href}, text={text_full[:30]}")
-                    continue
-                # 長いテキストは除外（「LINE PRスタンプ」等）
-                if len(text_full) > 10:
-                    status.update("デバッグ", f"除外（テキスト長すぎ）: '{text_full[:30]}'")
-                    continue
-                status.update("デバッグ", f"「スタンプ」クリック: idx={idx}, href={href}")
-                btn.click(force=True)
+        stamp_href = page.evaluate("""
+            (() => {
+                const links = document.querySelectorAll('a[href]');
+                const excluded = ['promotion', 'guideline', 'review', 'stats', 'studio',
+                                  'pr-sticker', 'prsticker', 'line-pr'];
+                for (const el of links) {
+                    const text = (el.textContent || '').trim();
+                    const href = el.href || '';
+                    const hrefLower = href.toLowerCase();
+                    // サイドバーやフッターのリンクを除外
+                    if (excluded.some(ex => hrefLower.includes(ex))) continue;
+                    // テキストが正確に「スタンプ」のみ（「LINE PRスタンプ」等を除外）
+                    if (text === 'スタンプ' || text === 'Stickers') {
+                        return href;
+                    }
+                }
+                return null;
+            })()
+        """)
+        if stamp_href:
+            status.update("デバッグ", f"スタンプボタンhref: {stamp_href}")
+            page.goto(stamp_href, timeout=30000)
+            time.sleep(3)
+            _wait_for_page_ready(page)
+            new_url = _get_real_url(page)
+            if new_url != type_select_url:
                 sticker_type_selected = True
                 status.update("自動処理中", "スタンプの種類を選択中...", 32)
-                time.sleep(3)
-                _wait_for_page_ready(page)
-                break
-            except Exception as e:
-                status.update("デバッグ", f"スタンプボタン[{idx}]クリック失敗: {e}")
-                continue
+            else:
+                status.update("デバッグ", "goto後もURL変化なし")
     except Exception as e:
-        status.update("デバッグ", f"Playwrightスタンプ選択失敗: {e}")
+        status.update("デバッグ", f"href遷移失敗: {e}")
 
-    # 戦略2: JavaScript フォールバック
+    # 戦略2: Playwrightネイティブクリック（スクロール+force=True）
+    if not sticker_type_selected:
+        try:
+            stamp_btn = page.get_by_text("スタンプ", exact=True)
+            stamp_count = stamp_btn.count()
+            status.update("デバッグ", f"「スタンプ」ボタン候補: {stamp_count}個")
+            for idx in range(stamp_count):
+                btn = stamp_btn.nth(idx)
+                try:
+                    if not btn.is_visible(timeout=2000):
+                        continue
+                    # サイドバーリンクを除外（親要素のテキストで判定）
+                    parent_text = btn.evaluate(
+                        "e => (e.closest('a') || e.closest('li') || e).textContent || ''"
+                    ).strip()
+                    if len(parent_text) > 10:
+                        status.update("デバッグ", f"除外（サイドバー要素）: '{parent_text[:30]}'")
+                        continue
+                    # ボタンが画面内に見えるようスクロール
+                    btn.scroll_into_view_if_needed()
+                    time.sleep(0.5)
+                    btn.click(force=True)
+                    time.sleep(3)
+                    _wait_for_page_ready(page)
+                    new_url = _get_real_url(page)
+                    if new_url != type_select_url:
+                        sticker_type_selected = True
+                        status.update("自動処理中", "スタンプの種類を選択中...", 32)
+                        break
+                    status.update("デバッグ", f"クリック後URL変化なし: idx={idx}")
+                except Exception as e:
+                    status.update("デバッグ", f"ボタン[{idx}]クリック失敗: {e}")
+                    continue
+        except Exception as e:
+            status.update("デバッグ", f"Playwrightクリック失敗: {e}")
+
+    # 戦略3: JavaScript el.click() フォールバック
     if not sticker_type_selected:
         try:
             result = page.evaluate("""
                 (() => {
-                    const candidates = document.querySelectorAll('a[href], button, [role="button"]');
+                    const links = document.querySelectorAll('a[href], button, [role="button"]');
                     const excluded = ['promotion', 'guideline', 'review', 'stats', 'studio'];
-                    for (const el of candidates) {
+                    for (const el of links) {
                         const text = (el.textContent || '').trim();
                         const href = el.href || el.getAttribute('href') || '';
-                        if (text === 'スタンプ' || text === 'Stickers') {
-                            const isExcluded = excluded.some(ex => href.includes(ex));
-                            if (!isExcluded) {
-                                el.click();
-                                return {text: text, href: href, tag: el.tagName};
-                            }
+                        if ((text === 'スタンプ' || text === 'Stickers') &&
+                            !excluded.some(ex => href.includes(ex))) {
+                            el.scrollIntoView({block: 'center'});
+                            el.click();
+                            return {text, href, tag: el.tagName};
                         }
                     }
                     return null;
                 })()
             """)
             if result:
-                sticker_type_selected = True
-                status.update("デバッグ", f"JSスタンプ選択: {result}")
+                status.update("デバッグ", f"JSクリック: {result}")
                 time.sleep(3)
                 _wait_for_page_ready(page)
+                new_url = _get_real_url(page)
+                if new_url != type_select_url:
+                    sticker_type_selected = True
         except Exception as e:
-            status.update("デバッグ", f"JSスタンプ選択失敗: {e}")
+            status.update("デバッグ", f"JSクリック失敗: {e}")
 
     if sticker_type_selected:
         status.save_screenshot(page, "05_after_sticker_select")
     else:
-        status.update("デバッグ", "「スタンプ」ボタン未検出（既にスタンプ作成ページの可能性）")
+        status.update("デバッグ", "「スタンプ」ボタンをクリックできませんでした")
+        status.save_screenshot(page, "05_sticker_btn_failed")
+
+        # ★重要: タイプ選択ページから動けていない場合は即座に失敗
+        # 証拠: session 34147374 等で全スクリーンショットが同じ（タイプ選択ページのまま）
+        # → コードが先に進んでフォーム入力・保存を試みるが全て失敗し、偽の「完了」になる
+        still_on_type_select = False
+        try:
+            still_on_type_select = page.evaluate("""
+                (() => {
+                    const links = document.querySelectorAll('a[href]');
+                    for (const el of links) {
+                        const text = (el.textContent || '').trim();
+                        if (text === 'スタンプ' || text === 'Stickers') return true;
+                    }
+                    // 3つの緑ボタンがある = まだタイプ選択ページ
+                    const buttons = document.querySelectorAll('a');
+                    let typeButtonCount = 0;
+                    for (const el of buttons) {
+                        const text = (el.textContent || '').trim();
+                        if (['スタンプ', '絵文字', '着せかえ', 'Stickers', 'Emoji', 'Themes'].includes(text)) {
+                            typeButtonCount++;
+                        }
+                    }
+                    return typeButtonCount >= 2;
+                })()
+            """)
+        except Exception:
+            pass
+
+        if still_on_type_select:
+            status.update("デバッグ", "スタンプタイプ選択ページから遷移できませんでした。即座に失敗を返します。")
+            return False
 
     # 誤ナビゲーション検知（promotionページに飛んでいないか）
     current_url = _get_real_url(page)
@@ -1063,26 +1131,40 @@ def navigate_to_new_sticker(page: Page, status: UploadStatus, create_url: str = 
 
     # スタンプ作成フォームの検出（最大5回リトライ）
     # フォームにはtextarea（説明文欄）やtext input（タイトル欄）が存在する
+    # 成功セッション(a2b9c710)の証拠: 新規登録フォームには
+    # - textarea（スタンプ説明文）
+    # - 複数のinput[type='text']（タイトル、コピーライト等）
+    # - ラジオボタン（スタンプのタイプ選択）
+    # - 「保存」「キャンセル」ボタン
     for retry in range(5):
         textarea_count = page.locator("textarea").count()
         text_input_count = page.locator("input[type='text']").count()
+        radio_count = page.locator("input[type='radio']").count()
         current_url = _get_real_url(page)
 
-        # URLベースの判定（/create配下にいるか）
+        # URLベースの判定
         is_create_url = "/create" in current_url or "/new" in current_url or "/edit" in current_url
 
         status.update("デバッグ", f"フォーム検出[{retry+1}/5]: textarea={textarea_count}, "
-                       f"input[text]={text_input_count}, is_create_url={is_create_url}")
+                       f"input[text]={text_input_count}, radio={radio_count}, is_create_url={is_create_url}")
 
-        # フォーム検出条件:
-        # 1. textareaがある = 説明文欄がある（フォーム確定）
-        # 2. /create URLにいて text inputが2個以上（タイトル + コピーライト等）
+        # フォーム検出条件（厳格版）:
+        # 証拠(成功セッションa2b9c710のdebug_05): フォームにはtextarea+text input+radioが揃っている
+        # 条件1: textareaがある = 説明文欄がある（フォーム確定）
         if textarea_count > 0:
             status.update("自動処理中", "スタンプ情報の入力を準備中...", 35)
             status.save_screenshot(page, "05_form_found")
             return True
 
-        if is_create_url and text_input_count >= 2:
+        # 条件2: ラジオボタン（スタンプのタイプ選択）+ テキスト入力があるフォーム
+        if radio_count > 0 and text_input_count >= 1:
+            status.update("自動処理中", "スタンプ情報の入力を準備中...", 35)
+            status.save_screenshot(page, "05_form_found")
+            return True
+
+        # 条件3: text inputが3個以上（タイトル + コピーライト + 言語等）
+        # 注意: 2個では不十分（タイプ選択ページにも隠しinputがある可能性）
+        if text_input_count >= 3:
             status.update("自動処理中", "スタンプ情報の入力を準備中...", 35)
             status.save_screenshot(page, "05_form_found")
             return True
@@ -1727,9 +1809,10 @@ def upload_images(page: Page, output_dir: Path, status: UploadStatus):
     status.update("画像アップ", f"画像アップロード完了！({uploaded_count}/{total}枚成功)", 95)
 
 
-def _submit_review_request(page: Page, status: UploadStatus):
+def _submit_review_request(page: Page, status: UploadStatus) -> bool:
     """画像アップロード後、審査リクエストボタンを押して審査提出する。
     画像編集ページからスタンプ詳細ページに戻り、「リクエスト」ボタンをクリックする。
+    Returns: True if review request was submitted, False otherwise.
     """
     status.update("自動処理中", "審査リクエストを準備中...", 96)
 
@@ -1829,7 +1912,7 @@ def _submit_review_request(page: Page, status: UploadStatus):
     if not request_clicked:
         status.update("エラー", "審査リクエストの送信に失敗しました。もう一度お試しください。")
         status.save_screenshot(page, "11_request_button_not_found")
-        return
+        return False
 
     # Step 3: 確認ダイアログ対応
     # LINE Creators Marketでは「リクエスト」クリック後に確認ダイアログが出る可能性がある
@@ -1886,6 +1969,7 @@ def _submit_review_request(page: Page, status: UploadStatus):
 
     status.save_screenshot(page, "12_after_request")
     status.update("自動処理中", "審査リクエスト送信完了！", 99)
+    return True
 
 
 # ============================================================
@@ -2137,22 +2221,45 @@ def upload_to_line(
             # Step 7: 審査リクエスト送信
             status.update("審査準備中", "画像アップロード完了！審査リクエストを自動送信しています...", 95)
 
-            _submit_review_request(page, status)
+            review_submitted = _submit_review_request(page, status)
 
             # Step 8: 最終検証 - ステータスが「審査待ち」に変わったか確認
             time.sleep(3)
             final_url = _get_real_url(page)
             status.update("デバッグ", f"最終URL: {final_url}")
 
+            # 審査リクエストが送信されなかった場合はエラー
+            if not review_submitted:
+                status.update("エラー", "スタンプは作成されましたが、審査リクエストの送信に失敗しました。LINE Creators Marketで手動で審査リクエストを送信してください。")
+                status.save_screenshot(page, "99_review_failed")
+                if interactive:
+                    print("\n  審査リクエスト送信に失敗しました。")
+                    print("  LINE Creators Marketで手動で確認してください。")
+                    print("\n  ブラウザを閉じるにはEnterを押してください...")
+                    input()
+                else:
+                    time.sleep(300)
+                return False
+
             # ページ内のステータステキストを確認
             try:
                 page_text = page.inner_text("body")
                 if "審査待ち" in page_text or "リクエスト済み" in page_text:
-                    status.update("完了", "✅ スタンプが審査に提出されました！LINEの審査には数日かかります。", 100)
+                    status.update("完了", "スタンプが審査に提出されました。LINEの審査には数日かかります。", 100)
                 elif "編集中" in page_text:
                     # 審査リクエストが送信されなかった可能性
-                    status.update("完了", "スタンプは作成されましたが、審査リクエストの送信を確認してください。LINE Creators Marketで手動で確認できます。", 100)
+                    status.update("エラー", "スタンプは作成されましたが、審査リクエストの送信を確認してください。LINE Creators Marketで手動で確認できます。")
+                    status.save_screenshot(page, "99_still_editing")
+                    if interactive:
+                        print("\n  審査リクエストの送信状態を確認してください。")
+                        print("\n  ブラウザを閉じるにはEnterを押してください...")
+                        input()
+                    else:
+                        time.sleep(300)
+                    return False
                 else:
+                    # 審査リクエストボタンはクリックできたが、最終確認ができない
+                    # スタンプIDが確認済みなので、登録自体は成功している可能性が高い
                     status.update("完了", "スタンプの登録処理が完了しました。LINE Creators Marketで状態を確認してください。", 100)
             except Exception:
                 status.update("完了", "スタンプの登録処理が完了しました。LINE Creators Marketで状態を確認してください。", 100)
