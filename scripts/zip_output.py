@@ -32,6 +32,11 @@ def create_zip(output_dir, zip_path=None) -> Path:
         raise FileNotFoundError(f"{output_dir} にスタンプ画像が見つかりません。")
 
     with zipfile.ZipFile(str(zip_path), "w", zipfile.ZIP_DEFLATED) as zf:
+        # main.png / tab.png をZIPに含める（LINE Creators Market必須）
+        for special in ["main.png", "tab.png"]:
+            special_path = output_dir / special
+            if special_path.exists():
+                zf.write(str(special_path), special)
         for stamp_file in stamp_files:
             zf.write(str(stamp_file), stamp_file.name)
 

@@ -1517,75 +1517,52 @@ def upload_images(page: Page, output_dir: Path, status: UploadStatus):
     status.save_screenshot(page, "09_upload_page")
     status.dump_page_info(page, "画像アップロードページ")
 
-    # main.png / tab.png の存在確認
-    main_file = output_dir / "main.png"
-    tab_file = output_dir / "tab.png"
-    has_main = main_file.exists()
-    has_tab = tab_file.exists()
-    status.update("デバッグ", f"main.png: {'あり' if has_main else 'なし'}, tab.png: {'あり' if has_tab else 'なし'}")
-
-    # 方法1: 複数のfile inputがある場合（一度に全てセット可能）
-    file_inputs = page.locator("input[type='file']")
-    fi_count = file_inputs.count()
+    # ZIPファイルで一括アップロード（最も確実な方法）
+    zip_file = output_dir / "line_stamp.zip"
     status.update("画像アップ", "画像をアップロードしています...", 66)
 
-    if fi_count >= total:
-        # file inputをaccept属性とコンテキストで分類
-        # 証拠(session ecc8cc27): nth(0)がZIP用inputの可能性あり
-        # → accept属性やラベルで判別する
-        fi_map = _classify_file_inputs(page, fi_count, status)
+    if zip_file.exists():
+        # ZIPアップロード用のfile inputを探す
+        file_inputs = page.locator("input[type='file']")
+        fi_count = file_inputs.count()
+        status.update("デバッグ", f"file input数: {fi_count}")
 
-        # main.pngをアップロード
-        if has_main and fi_map.get("main") is not None:
+        zip_uploaded = False
+        for i in range(fi_count):
             try:
-                file_inputs.nth(fi_map["main"]).set_input_files(str(main_file))
-                status.update("画像アップ", "メイン画像をアップロード中...", 66)
-                time.sleep(1)
+                accept = file_inputs.nth(i).get_attribute("accept") or ""
+                # ZIP用input: accept属性が空 or .zipを含む
+                if ".zip" in accept or not accept or "image" not in accept:
+                    file_inputs.nth(i).set_input_files(str(zip_file))
+                    status.update("画像アップ", "ZIPファイルをアップロード中...", 80)
+                    zip_uploaded = True
+                    # アップロード処理完了を待つ
+                    time.sleep(5)
+                    break
             except Exception as e:
-                status.update("デバッグ", f"main.png 失敗: {e}")
+                status.update("デバッグ", f"ZIP input[{i}] 失敗: {e}")
+                continue
 
-        # tab.pngをアップロード
-        if has_tab and fi_map.get("tab") is not None:
-            try:
-                file_inputs.nth(fi_map["tab"]).set_input_files(str(tab_file))
-                status.update("画像アップ", "タブ画像をアップロード中...", 67)
-                time.sleep(1)
-            except Exception as e:
-                status.update("デバッグ", f"tab.png 失敗: {e}")
-
-        # スタンプ画像のfile inputインデックスリスト
-        sticker_indices = fi_map.get("stickers", [])
-
-        # スタンプ画像を各inputに1枚ずつ
-        for i, stamp_file in enumerate(stamp_files):
-            try:
-                if i < len(sticker_indices):
-                    idx = sticker_indices[i]
-                else:
-                    # フォールバック: 分類外のinputを順番に使う
-                    idx = i + (fi_count - total)
-                file_inputs.nth(idx).set_input_files(str(stamp_file))
-                status.update("画像アップ", f"スタンプ画像をアップロード中... ({i+1}/{total}枚)", 65 + int((i+1)/total*25))
-                time.sleep(1)
-            except Exception as e:
-                status.update("デバッグ", f"[{i+1}/{total}] {stamp_file.name} 失敗: {e}")
-        status.save_screenshot(page, "10_after_upload")
-        status.update("画像アップ", "画像アップロード完了！", 95)
-        return
-
-    # 方法2: file inputが1つ → multiple属性でまとめてアップロード
-    if fi_count == 1:
-        try:
-            fi = file_inputs.first
-            file_paths = [str(f) for f in stamp_files]
-            fi.set_input_files(file_paths)
-            status.update("画像アップ", f"スタンプ画像をアップロード中... ({total}枚)", 85)
-            time.sleep(5)
+        if zip_uploaded:
+            # アップロード後にエラーがないか確認
+            time.sleep(3)
             status.save_screenshot(page, "10_after_upload")
-            status.update("画像アップ", "画像アップロード完了！", 95)
+            # エラー表示を確認
+            error_text = ""
+            try:
+                error_el = page.locator(".mdAlert, .error, [class*='error']").first
+                if error_el.is_visible(timeout=2000):
+                    error_text = error_el.inner_text()
+            except Exception:
+                pass
+            if error_text:
+                status.update("デバッグ", f"アップロードエラー: {error_text}")
+            else:
+                status.update("画像アップ", "画像アップロード完了！", 95)
             return
-        except Exception as e:
-            status.update("デバッグ", f"一括アップロード失敗: {e}")
+
+    # フォールバック: ZIPが無い場合は個別アップロード
+    status.update("デバッグ", "ZIPアップロード不可、個別アップロードに切り替え")
 
     # 方法3: スタンプスロットをクリックしてfile inputを出現させる
     # 編集ページではスタンプアイテムの空スロットをクリックするとfile inputが出る
