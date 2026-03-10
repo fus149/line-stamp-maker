@@ -7,6 +7,7 @@ from __future__ import annotations
 import json
 import random
 import shutil
+import threading
 import time
 import uuid
 from pathlib import Path
@@ -41,6 +42,9 @@ templates = Jinja2Templates(directory=str(PROJECT_ROOT / "templates"))
 
 # サーバー起動時刻をキャッシュバスターに使用（別PCでも最新CSS/JSを確実に読み込む）
 CACHE_BUST = str(int(time.time()))
+
+# 同時LINE登録処理の上限（各処理がヘッドレスChrome1つを使うため）
+_upload_semaphore = threading.Semaphore(3)
 
 
 def load_templates() -> list[str]:
@@ -257,11 +261,20 @@ async def upload_to_line_api(
     # ステータスファイルのパスを設定
     status_file = SESSIONS_DIR / session_id / "upload_status.json"
 
-    # Playwrightを別スレッドで実行（ブラウザが開く）
-    import threading
+    # Playwrightを別スレッドで実行（ヘッドレスブラウザ）
     from scripts.upload_to_line import upload_to_line
 
     def _run_upload():
+        if not _upload_semaphore.acquire(timeout=30):
+            # 同時接続数上限に達した場合
+            error_data = {
+                "step": "エラー",
+                "message": "現在混み合っています。しばらくしてからもう一度お試しください。",
+                "progress": 0,
+                "logs": ["[エラー] 同時処理数の上限に達しました"],
+            }
+            status_file.write_text(json.dumps(error_data, ensure_ascii=False), encoding="utf-8")
+            return
         try:
             upload_to_line(output_dir, title, description, interactive=False, status_file=status_file)
         except Exception as e:
@@ -273,13 +286,15 @@ async def upload_to_line_api(
                 "logs": [f"[エラー] スレッド内エラー: {e}"],
             }
             status_file.write_text(json.dumps(error_data, ensure_ascii=False), encoding="utf-8")
+        finally:
+            _upload_semaphore.release()
 
     thread = threading.Thread(target=_run_upload, daemon=True)
     thread.start()
 
     return {
         "status": "started",
-        "message": "ブラウザが開きます。LINEアカウントでログインしてください。",
+        "message": "QRコードを準備しています。LINEアプリでスキャンしてログインしてください。",
         "session_id": session_id,
     }
 

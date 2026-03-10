@@ -195,6 +195,39 @@ def _capture_qr_code(page: Page, status: UploadStatus) -> bool:
         return False
 
 
+def _switch_to_qr_login(page: Page, status: UploadStatus):
+    """access.line.me のログインページで「QRコードログイン」に切り替える。
+    デフォルトはメール/パスワード表示のため、QRコード表示にはクリックが必要。
+    """
+    try:
+        # 「QRコードログイン」リンク/ボタンを探してクリック
+        qr_btn = page.get_by_text("QRコードログイン")
+        if qr_btn.first.is_visible(timeout=5000):
+            qr_btn.first.click()
+            status.update("デバッグ", "「QRコードログイン」をクリック")
+            time.sleep(2)
+            _wait_for_page_ready(page)
+            return True
+    except Exception as e:
+        status.update("デバッグ", f"QRコード画面切り替え失敗: {e}")
+
+    # フォールバック: テキストが異なるパターン
+    try:
+        for text in ["QRコードでログイン", "QR Code Login", "QRコード"]:
+            btn = page.get_by_text(text)
+            if btn.first.is_visible(timeout=1000):
+                btn.first.click()
+                status.update("デバッグ", f"「{text}」をクリック")
+                time.sleep(2)
+                _wait_for_page_ready(page)
+                return True
+    except Exception:
+        pass
+
+    status.update("デバッグ", "QRコードログインボタンが見つかりません")
+    return False
+
+
 def _wait_for_page_ready(page: Page, timeout: int = 10):
     """ページの読み込み完了を待つ。"""
     try:
@@ -379,22 +412,24 @@ def wait_for_login(page: Page, status: UploadStatus, timeout: int = 300) -> Opti
     # ケース1: 直接ダッシュボードにリダイレクトされた（ログイン済み）
     dashboard = _check_all_pages_for_dashboard()
     if dashboard:
-        _hide_browser(dashboard, status)  # 自動ログイン → 即座に最小化
         status.update("ログイン", "✅ 前回のログインが有効です（自動ログイン）", 20)
         return dashboard
 
     # ケース2: creator.line.meにいるがダッシュボードではない → ダッシュボードへ誘導
     creator = _check_all_pages_for_creator_site()
     if creator:
-        _hide_browser(creator, status)  # ログイン済み → 即座に最小化
         status.update("デバッグ", "creator.line.me検出。ダッシュボードへ誘導中...")
         if _try_navigate_to_dashboard(creator, status):
             status.update("ログイン", "✅ ログイン済み", 20)
             return creator
 
     # ケース3: ログインページ → QRコードをキャプチャしてスマホに表示
-    # ブラウザはPC画面外のまま（ユーザーに見せない）
-    status.update("デバッグ", "ログインページ検出 → QRコードをキャプチャします")
+    status.update("デバッグ", "ログインページ検出 → QRコード画面に切り替えます")
+
+    # 「QRコードログイン」リンクをクリックしてQR表示画面に切り替え
+    # access.line.me はデフォルトでメール/パスワードフォームを表示するため、
+    # QRコードを表示するにはこのリンクをクリックする必要がある
+    _switch_to_qr_login(page, status)
 
     # QRコードをキャプチャしてスマホUIに表示
     qr_captured = _capture_qr_code(page, status)
@@ -419,6 +454,14 @@ def wait_for_login(page: Page, status: UploadStatus, timeout: int = 300) -> Opti
             try:
                 current_url = _get_real_url(page)
                 if _is_on_login_page(current_url):
+                    # 90秒ごとにページをリロードしてQRコードを更新
+                    # （LINE QRコードは約2分で期限切れになる）
+                    if elapsed > 0 and elapsed % 90 < interval:
+                        status.update("デバッグ", "QRコード期限切れ → ページリロード")
+                        page.reload(timeout=15000)
+                        _wait_for_page_ready(page)
+                        _switch_to_qr_login(page, status)
+                        time.sleep(1)
                     _capture_qr_code(page, status)
                     last_qr_capture = elapsed
                     status.update("デバッグ", f"QRコード再取得（{elapsed}秒経過）")
@@ -464,7 +507,6 @@ def wait_for_login(page: Page, status: UploadStatus, timeout: int = 300) -> Opti
                 # ダッシュボードに到達した
                 if "/my/" in url and "access.line.me" not in url:
                     _wait_for_page_ready(p)
-                    _hide_browser(p, status)  # QRログイン完了 → 最小化
                     status.update("ログイン", "✅ ログイン完了！", 20)
                     return p
                 # creator.line.meにいる（ログイン後リダイレクト）がダッシュボードではない
@@ -474,7 +516,6 @@ def wait_for_login(page: Page, status: UploadStatus, timeout: int = 300) -> Opti
                         status.update("デバッグ", f"ログイン検出: {url[:100]}")
                     # ダッシュボードへナビゲート（1回だけ）
                     try:
-                        _hide_browser(p, status)  # ログイン検出 → 即座に最小化
                         p.goto("https://creator.line.me/my/sticker/", timeout=15000)
                         _wait_for_page_ready(p)
                         new_url = _get_real_url(p)
@@ -2184,12 +2225,12 @@ def upload_to_line(
         """ブラウザを起動する。失敗時はロック削除してリトライ。"""
         launch_kwargs = {
             "user_data_dir": str(data_dir),
-            "headless": False,
+            "headless": True,  # ヘッドレスモード：PCにChromeウィンドウを一切表示しない
             "locale": "ja-JP",
-            "no_viewport": True,
+            "viewport": {"width": 1280, "height": 800},
             "args": [
-                "--window-position=-32000,-32000",  # 画面外に配置（最小化より安全）
-                "--window-size=800,600",
+                "--disable-blink-features=AutomationControlled",  # bot検知回避
+                "--no-sandbox",
             ],
         }
 
@@ -2232,10 +2273,7 @@ def upload_to_line(
         page = context.new_page()
         status.update("デバッグ", "新しいページ作成完了")
 
-        # ブラウザは --window-position=-32000,-32000 で画面外に配置済み。
-        # ここで _hide_browser（CDP minimize）は呼ばない。
-        # 理由: 最小化するとスクリーンショット（QRコード取得）が不可能になる。
-        # ログイン確認後に wait_for_login 内で _hide_browser を呼ぶ。
+        # ヘッドレスモードのため、ウィンドウ管理は不要。
 
         # ============================================================
         # 全ページに対してモーダル自動非表示CSS/JSを注入
