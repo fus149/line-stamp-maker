@@ -365,6 +365,20 @@ def _is_on_creator_site(url: str) -> bool:
     return "creator.line.me" in url and "access.line.me" not in url
 
 
+def _is_on_creator_signup_page(url: str) -> bool:
+    """初回ユーザーのクリエイター登録ページにいるか判定。
+    /signup/line_auth (OAuth入口) と /signup/line_callback (OAuthコールバック) は除外。
+    """
+    if "creator.line.me" not in url:
+        return False
+    if "/signup/" not in url:
+        return False
+    # OAuth関連URLは登録ページではない
+    if "/signup/line_auth" in url or "/signup/line_callback" in url:
+        return False
+    return True
+
+
 def _get_real_url(page: Page) -> str:
     """ページの実際のURLを取得する。
     page.url はPlaywrightのキャッシュ値で、OAuth等のリダイレクト後に
@@ -394,6 +408,236 @@ def _try_navigate_to_dashboard(page: Page, status: UploadStatus) -> bool:
 
 
 # ============================================================
+# 初回クリエイター登録
+# ============================================================
+
+def _handle_creator_registration(page: Page, title: str, status: UploadStatus) -> bool:
+    """初回ユーザーのクリエイター登録フォームを自動入力して送信する。
+
+    LINE Creators Market の登録フローを自動処理:
+    1. 利用規約への同意
+    2. 事業形態の選択（個人）
+    3. 申込者氏名・屋号の入力
+    4. 登録ボタンのクリック
+
+    戻り値: 登録フォーム送信に成功したらTrue。
+    """
+    # 既に登録ページでなければスキップ
+    url = _get_real_url(page)
+    if not _is_on_creator_signup_page(url):
+        status.update("デバッグ", "登録ページではなくなった — スキップ")
+        return True
+
+    status.update("クリエイター登録", "📝 初回クリエイター登録を行っています...", 15)
+    _wait_for_page_ready(page)
+    status.save_screenshot(page, "signup_01_initial")
+
+    # --- Step 1: 利用規約の同意ボタンがあればクリック ---
+    try:
+        for agree_text in ["同意する", "同意して次へ", "Agree", "Accept"]:
+            btn = page.get_by_text(agree_text, exact=False)
+            if btn.count() > 0 and btn.first.is_visible(timeout=3000):
+                # 同意チェックボックスがあれば先にチェック
+                checkboxes = page.locator("input[type='checkbox']")
+                for i in range(checkboxes.count()):
+                    cb = checkboxes.nth(i)
+                    try:
+                        if cb.is_visible(timeout=1000) and not cb.is_checked():
+                            cb.check(force=True)
+                            status.update("デバッグ", f"同意チェックボックスをチェック ({i + 1})")
+                            time.sleep(0.5)
+                    except Exception:
+                        continue
+                btn.first.click(force=True)
+                status.update("デバッグ", f"「{agree_text}」をクリック")
+                time.sleep(3)
+                _wait_for_page_ready(page)
+                break
+    except Exception as e:
+        status.update("デバッグ", f"同意ボタン処理: {e}")
+
+    status.save_screenshot(page, "signup_02_after_agree")
+
+    # 同意後にダッシュボードへ遷移した場合（既に登録済みだった）
+    new_url = _get_real_url(page)
+    if "/my/" in new_url:
+        status.update("デバッグ", "同意後にダッシュボードへ遷移 — 既に登録済み")
+        return True
+    if not _is_on_creator_signup_page(new_url):
+        status.update("デバッグ", f"同意後に別ページへ遷移: {new_url[:100]}")
+        return True
+
+    # --- Step 2: 事業形態を「個人」に設定 ---
+    try:
+        selects = page.locator("select")
+        for i in range(selects.count()):
+            sel = selects.nth(i)
+            try:
+                if not sel.is_visible(timeout=1000):
+                    continue
+                name = (sel.get_attribute("name") or "").lower()
+                sel_id = sel.get_attribute("id") or ""
+                label_text = ""
+                if sel_id:
+                    label = page.locator(f"label[for='{sel_id}']")
+                    if label.count() > 0:
+                        label_text = (label.first.text_content() or "").lower()
+
+                if any(kw in name for kw in ["business", "type", "form"]) or \
+                   any(kw in label_text for kw in ["事業形態", "事業", "business"]):
+                    sel.select_option(label="個人")
+                    status.update("デバッグ", "事業形態: 個人を選択")
+                    time.sleep(0.5)
+                    break
+            except Exception:
+                continue
+    except Exception as e:
+        status.update("デバッグ", f"事業形態選択: {e}")
+
+    # --- Step 3: 申込者氏名と屋号を入力 ---
+    creator_name = title if title else "スタンプクリエイター"
+    try:
+        inputs = page.locator("input[type='text']")
+        count = inputs.count()
+        for i in range(count):
+            inp = inputs.nth(i)
+            try:
+                if not inp.is_visible(timeout=1000):
+                    continue
+                name_attr = (inp.get_attribute("name") or "").lower()
+                placeholder = (inp.get_attribute("placeholder") or "").lower()
+                inp_id = inp.get_attribute("id") or ""
+                label_text = ""
+                if inp_id:
+                    label = page.locator(f"label[for='{inp_id}']")
+                    if label.count() > 0:
+                        label_text = (label.first.text_content() or "")
+
+                # 氏名フィールド
+                if any(kw in name_attr for kw in ["name", "applicant"]) or \
+                   any(kw in label_text for kw in ["氏名", "名前", "申込者"]) or \
+                   any(kw in placeholder for kw in ["氏名", "名前", "name"]):
+                    current_val = inp.input_value()
+                    if not current_val.strip():
+                        inp.fill(creator_name)
+                        status.update("デバッグ", f"氏名入力: {creator_name}")
+
+                # 屋号フィールド
+                if any(kw in name_attr for kw in ["trade", "creator"]) or \
+                   any(kw in label_text for kw in ["屋号", "ペンネーム", "クリエイター名"]) or \
+                   any(kw in placeholder for kw in ["屋号", "trade", "クリエイター"]):
+                    current_val = inp.input_value()
+                    if not current_val.strip():
+                        inp.fill(creator_name)
+                        status.update("デバッグ", f"屋号入力: {creator_name}")
+            except Exception:
+                continue
+    except Exception as e:
+        status.update("デバッグ", f"名前入力: {e}")
+
+    # --- Step 4: 居住国が未選択なら「日本」を選択 ---
+    try:
+        selects = page.locator("select")
+        for i in range(selects.count()):
+            sel = selects.nth(i)
+            try:
+                if not sel.is_visible(timeout=1000):
+                    continue
+                name = (sel.get_attribute("name") or "").lower()
+                sel_id = sel.get_attribute("id") or ""
+                label_text = ""
+                if sel_id:
+                    label = page.locator(f"label[for='{sel_id}']")
+                    if label.count() > 0:
+                        label_text = (label.first.text_content() or "").lower()
+
+                if any(kw in name for kw in ["country", "region", "居住"]) or \
+                   any(kw in label_text for kw in ["居住国", "国", "country", "region"]):
+                    try:
+                        sel.select_option(label="日本")
+                        status.update("デバッグ", "居住国: 日本を選択")
+                    except Exception:
+                        try:
+                            sel.select_option(label="Japan")
+                            status.update("デバッグ", "居住国: Japanを選択")
+                        except Exception:
+                            pass
+                    break
+            except Exception:
+                continue
+    except Exception as e:
+        status.update("デバッグ", f"居住国選択: {e}")
+
+    # --- Step 5: 残りのチェックボックスを全てチェック ---
+    try:
+        checkboxes = page.locator("input[type='checkbox']")
+        for i in range(checkboxes.count()):
+            cb = checkboxes.nth(i)
+            try:
+                if cb.is_visible(timeout=1000) and not cb.is_checked():
+                    cb.check(force=True)
+                    status.update("デバッグ", f"チェックボックスをチェック ({i + 1})")
+                    time.sleep(0.3)
+            except Exception:
+                continue
+    except Exception:
+        pass
+
+    status.save_screenshot(page, "signup_03_filled")
+
+    # --- Step 6: 登録ボタンをクリック ---
+    registered = False
+    for submit_text in ["登録", "Register", "送信", "Submit", "次へ", "確認"]:
+        try:
+            btn = page.get_by_text(submit_text, exact=True)
+            if btn.count() > 0 and btn.first.is_visible(timeout=2000):
+                btn.first.click(force=True)
+                status.update("デバッグ", f"「{submit_text}」をクリック")
+                registered = True
+                time.sleep(3)
+                _wait_for_page_ready(page)
+                break
+        except Exception:
+            continue
+
+    if not registered:
+        # フォールバック: submit ボタンを探す
+        try:
+            submit_btn = page.locator("button[type='submit'], input[type='submit']").first
+            if submit_btn.is_visible(timeout=2000):
+                submit_btn.click(force=True)
+                status.update("デバッグ", "submitボタンをクリック")
+                registered = True
+                time.sleep(3)
+                _wait_for_page_ready(page)
+        except Exception:
+            pass
+
+    status.save_screenshot(page, "signup_04_submitted")
+
+    if not registered:
+        status.update("警告", "クリエイター登録フォームの送信ボタンが見つかりませんでした")
+        return False
+
+    # 送信後の確認ページで追加の確認ボタンがある場合
+    try:
+        for confirm_text in ["確認", "OK", "完了", "送信"]:
+            btn = page.get_by_text(confirm_text, exact=True)
+            if btn.count() > 0 and btn.first.is_visible(timeout=3000):
+                btn.first.click(force=True)
+                status.update("デバッグ", f"確認ボタン「{confirm_text}」をクリック")
+                time.sleep(3)
+                _wait_for_page_ready(page)
+                break
+    except Exception:
+        pass
+
+    status.save_screenshot(page, "signup_05_confirmed")
+    status.update("クリエイター登録", "📧 登録処理中... メール確認が必要な場合があります", 17)
+    return True
+
+
+# ============================================================
 # ログイン検出
 # ============================================================
 
@@ -416,16 +660,22 @@ def _find_dashboard_page(context: BrowserContext, status: UploadStatus) -> Optio
             if "/my/" in url:
                 status.update("デバッグ", f"/my/配下検出: {url[:100]}")
                 creator_page = p
-            # creator.line.me にいるページ（ログインページ以外）を記録
-            elif _is_on_creator_site(url) and "/signup/" not in url:
+            # creator.line.me にいるページ（ログインページ・登録ページ以外）を記録
+            elif _is_on_creator_site(url) and not _is_on_creator_signup_page(url) and "/signup/line_auth" not in url:
                 creator_page = p
             # OAuth コールバック中のページ
             if "/signup/line_callback" in url:
                 status.update("デバッグ", "OAuthコールバック検出")
                 try:
-                    p.wait_for_url(lambda u: "/my/" in u or (_is_on_creator_site(u) and "/signup/" not in u), timeout=15000)
+                    p.wait_for_url(
+                        lambda u: "/my/" in u or _is_on_creator_signup_page(u) or (_is_on_creator_site(u) and "/signup/" not in u),
+                        timeout=15000,
+                    )
+                    url_after = _get_real_url(p)
                     if _is_on_dashboard(p):
                         return p
+                    if _is_on_creator_signup_page(url_after):
+                        status.update("デバッグ", "初回ユーザー: クリエイター登録ページ検出（OAuthコールバック後）")
                     creator_page = p
                 except PwTimeout:
                     pass
@@ -444,7 +694,7 @@ def _find_dashboard_page(context: BrowserContext, status: UploadStatus) -> Optio
     return None
 
 
-def wait_for_login(page: Page, status: UploadStatus, timeout: int = 300, email: str = "", password: str = "") -> Optional[Page]:
+def wait_for_login(page: Page, status: UploadStatus, timeout: int = 300, email: str = "", password: str = "", title: str = "") -> Optional[Page]:
     """ユーザーがログインするまで待機。ログイン済みのダッシュボードページを返す。"""
     context = page.context
 
@@ -476,13 +726,24 @@ def wait_for_login(page: Page, status: UploadStatus, timeout: int = 300, email: 
         return None
 
     def _check_all_pages_for_creator_site() -> Optional[Page]:
-        """creator.line.meにいるページを返す（ログインページ除外）。
+        """creator.line.meにいるページを返す（ログインページ・登録ページ除外）。
         page.urlではなくJavaScriptで実URLを取得。
         """
         for p in context.pages:
             try:
                 url = _get_real_url(p)
-                if _is_on_creator_site(url) and "/signup/" not in url:
+                if _is_on_creator_site(url) and not _is_on_creator_signup_page(url) and "/signup/line_auth" not in url:
+                    return p
+            except Exception:
+                continue
+        return None
+
+    def _check_all_pages_for_signup() -> Optional[Page]:
+        """初回クリエイター登録ページにいるページを返す。"""
+        for p in context.pages:
+            try:
+                url = _get_real_url(p)
+                if _is_on_creator_signup_page(url):
                     return p
             except Exception:
                 continue
@@ -536,6 +797,41 @@ def wait_for_login(page: Page, status: UploadStatus, timeout: int = 300, email: 
                 if _try_navigate_to_dashboard(creator, status):
                     status.update("ログイン", "✅ ログイン完了！", 20)
                     return creator
+
+            # 初回ユーザー: クリエイター登録ページに遷移した場合
+            signup_page = _check_all_pages_for_signup()
+            if signup_page:
+                status.update("デバッグ", "初回ユーザー検出: クリエイター登録ページ")
+                if _handle_creator_registration(signup_page, title, status):
+                    # 登録後、メール確認またはダッシュボード遷移を待つ
+                    email_wait = 0
+                    while email_wait < 120:
+                        time.sleep(5)
+                        email_wait += 5
+                        # ダッシュボードに到達した？
+                        dashboard = _check_all_pages_for_dashboard()
+                        if dashboard:
+                            status.update("ログイン", "✅ クリエイター登録完了！", 20)
+                            return dashboard
+                        # 登録ページから別ページへ遷移した？
+                        current = _get_real_url(signup_page)
+                        if "/my/" in current:
+                            status.update("ログイン", "✅ クリエイター登録完了！", 20)
+                            return signup_page
+                        if not _is_on_creator_signup_page(current) and _is_on_creator_site(current):
+                            # 登録完了後の別ページ → ダッシュボードへ誘導
+                            if _try_navigate_to_dashboard(signup_page, status):
+                                status.update("ログイン", "✅ クリエイター登録完了！", 20)
+                                return signup_page
+                        if email_wait % 30 == 0:
+                            remaining = 120 - email_wait
+                            status.update("クリエイター登録", f"📧 メールのリンクをクリックして登録を完了してください（残り{remaining}秒）", 17)
+                    # タイムアウト → リダイレクト試行
+                    if _try_navigate_to_dashboard(signup_page, status):
+                        status.update("ログイン", "✅ クリエイター登録完了！", 20)
+                        return signup_page
+                    status.update("エラー", "⏰ クリエイター登録のメール確認がタイムアウトしました。メール内のリンクをクリックしてから、もう一度お試しください。", 0)
+                    return None
 
             # 本人確認画面（2段階認証）を検出
             if _is_on_verification_page(page):
@@ -673,8 +969,16 @@ def wait_for_login(page: Page, status: UploadStatus, timeout: int = 300, email: 
                     _wait_for_page_ready(p)
                     status.update("ログイン", "✅ ログイン完了！", 20)
                     return p
+                # 初回ユーザー: クリエイター登録ページ
+                if _is_on_creator_signup_page(url):
+                    if not login_detected:
+                        login_detected = True
+                        status.update("デバッグ", f"初回ユーザー登録ページ検出: {url[:100]}")
+                    _handle_creator_registration(p, title, status)
+                    # 登録後の遷移を待つ（次のポーリングで確認）
+                    continue
                 # creator.line.meにいる（ログイン後リダイレクト）がダッシュボードではない
-                if _is_on_creator_site(url) and "/signup/" not in url and "access.line.me" not in url:
+                if _is_on_creator_site(url) and not _is_on_creator_signup_page(url) and "access.line.me" not in url:
                     if not login_detected:
                         login_detected = True
                         status.update("デバッグ", f"ログイン検出: {url[:100]}")
@@ -2339,6 +2643,9 @@ def upload_to_line(
         status.update("エラー", f"{output_dir} にスタンプ画像が見つかりません")
         return False
 
+    # クリエイター名用に元のタイトルを保存（タイムスタンプ付加前）
+    creator_name = title
+
     # タイトルの一意性を確保（LINE Creators Marketは重複タイトルを拒否する）
     timestamp = datetime.now().strftime("%m%d%H%M")
     title = f"{title} {timestamp}"
@@ -2483,7 +2790,7 @@ def upload_to_line(
 
         try:
             # Step 1: ログイン
-            logged_in_page = wait_for_login(page, status, email=email, password=password)
+            logged_in_page = wait_for_login(page, status, email=email, password=password, title=creator_name)
             if logged_in_page is None:
                 return False
             page = logged_in_page
