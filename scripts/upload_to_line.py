@@ -2148,7 +2148,10 @@ def upload_to_line(
                 return False
             page = logged_in_page
 
-            # ログイン完了 → ダッシュボードで「新規登録」のhrefを取得
+            # ログイン完了 → すぐにブラウザを最小化（お客様に操作画面を見せない）
+            _hide_browser(page, status)
+
+            # ダッシュボードで「新規登録」のhrefを取得
             status.update("自動処理中", "ログイン完了！新規登録ページを探しています...", 22)
 
             # ダッシュボードから「新規登録」リンクのhrefを取得して直接遷移
@@ -2201,9 +2204,6 @@ def upload_to_line(
             # Step 5: フォーム保存（新規登録フォームを送信→編集ページへ遷移）
             form_saved = submit_creation_form(page, status)
 
-            # フォーム入力・保存後にブラウザを最小化
-            # （入力・保存中はスクリーンショットが必要なため、最小化は後回しにする）
-            _hide_browser(page, status)
             if not form_saved:
                 # 保存ボタンが見つからない = フォームが正しく表示されていない
                 # 失敗したまま続行すると「完了」と表示されるだけで実際には登録されない
