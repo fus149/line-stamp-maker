@@ -2063,7 +2063,7 @@ def upload_to_line(
             "headless": False,
             "locale": "ja-JP",
             "no_viewport": True,
-            "args": ["--start-maximized"],
+            "args": ["--start-minimized"],
         }
 
         for attempt in range(3):
@@ -2104,6 +2104,11 @@ def upload_to_line(
 
         page = context.new_page()
         status.update("デバッグ", "新しいページ作成完了")
+
+        # ブラウザを即座に最小化（--start-minimizedのフォールバック）
+        # スマホからの利用時にPCにブラウザが表示されないようにする
+        # 手動ログインが必要な場合のみ wait_for_login 内で bring_to_front する
+        _hide_browser(page, status)
 
         # ============================================================
         # 全ページに対してモーダル自動非表示CSS/JSを注入
