@@ -311,19 +311,62 @@ def wait_for_login(page: Page, status: UploadStatus, timeout: int = 300) -> Opti
             return creator
 
     # ケース3: ログインページ → ユーザーの手動ログインを待つ
+    # ブラウザを画面外から画面内に移動して表示（ユーザーがPCでログインできるように）
+    try:
+        cdp = page.context.new_cdp_session(page)
+        window = cdp.send("Browser.getWindowForTarget")
+        window_id = window["windowId"]
+        cdp.send("Browser.setWindowBounds", {
+            "windowId": window_id,
+            "bounds": {"windowState": "normal", "left": 100, "top": 100, "width": 800, "height": 600}
+        })
+        cdp.detach()
+    except Exception:
+        pass
     page.bring_to_front()
-    status.update("ログイン", "🔓 開いたブラウザでLINEにログインしてください", 10)
+    status.update("ログイン", "🔓 パソコンのChromeでLINEにログインしてください", 10)
 
     # === Step 3: ポーリングで待機 ===
     elapsed = 0
     interval = 3
     login_detected = False
+    pages_empty_count = 0
     while elapsed < timeout:
         time.sleep(interval)
         elapsed += interval
 
+        # ページ一覧を安全に取得
+        all_pages = []
+        try:
+            all_pages = context.pages
+        except Exception:
+            pass
+
+        # ブラウザページが0件の場合のリカバリー
+        if len(all_pages) == 0:
+            pages_empty_count += 1
+            status.update("デバッグ", f"ブラウザページが0件（{pages_empty_count}回目）")
+            # 新しいページを作成してリカバリー
+            if pages_empty_count <= 3:
+                try:
+                    recovery_page = context.new_page()
+                    recovery_page.goto(LOGIN_URL, timeout=15000)
+                    _wait_for_page_ready(recovery_page)
+                    page = recovery_page
+                    page.bring_to_front()
+                    status.update("デバッグ", "ページをリカバリーしました")
+                    continue
+                except Exception as e:
+                    status.update("デバッグ", f"リカバリー失敗: {e}")
+            if pages_empty_count >= 10:
+                status.update("エラー", "ブラウザとの接続が切れました。もう一度お試しください。")
+                return None
+            continue
+
+        pages_empty_count = 0
+
         # 全ページのURLを安全に確認（ナビゲートしない）
-        for p in context.pages:
+        for p in all_pages:
             try:
                 url = _get_real_url(p)
                 # ダッシュボードに到達した
@@ -351,23 +394,19 @@ def wait_for_login(page: Page, status: UploadStatus, timeout: int = 300) -> Opti
             except Exception:
                 continue
 
-        # 新しいタブ/ポップアップも確認
-        if len(context.pages) == 0:
-            status.update("デバッグ", "ブラウザページが0件。ブラウザが閉じられた可能性")
-
         # ステータス更新（15秒ごと）
         if elapsed % 15 == 0:
             remaining = timeout - elapsed
             page_urls = []
-            for p in context.pages:
+            for p in all_pages:
                 try:
                     page_urls.append(_get_real_url(p)[:80])
                 except Exception:
                     page_urls.append("(error)")
-            status.update("ログイン", f"🔓 ブラウザでログインしてください（残り{remaining}秒）", 10)
+            status.update("ログイン", f"🔓 パソコンのChromeでログインしてください（残り{remaining}秒）", 10)
             status.update("デバッグ", f"ページURL: {page_urls}")
 
-    status.update("エラー", "⏰ ログインがタイムアウトしました。もう一度お試しください。")
+    status.update("エラー", "⏰ ログインがタイムアウトしました。パソコンでLINEにログインしてからもう一度お試しください。")
     return None
 
 
@@ -2063,7 +2102,10 @@ def upload_to_line(
             "headless": False,
             "locale": "ja-JP",
             "no_viewport": True,
-            "args": ["--start-minimized"],
+            "args": [
+                "--window-position=-32000,-32000",  # 画面外に配置（最小化より安全）
+                "--window-size=800,600",
+            ],
         }
 
         for attempt in range(3):
