@@ -32,7 +32,7 @@ class UploadStatus:
         self.debug_dir = debug_dir
         self.logs: list[str] = []
 
-    def update(self, step: str, message: str, progress: int = 0):
+    def update(self, step: str, message: str, progress: int = 0, extra: dict = None):
         self.logs.append(f"[{step}] {message}")
         print(f"  [{step}] {message}")
         # 「デバッグ」「警告」ステップはターミナルのみ表示（お客様には見せない）
@@ -45,6 +45,8 @@ class UploadStatus:
                 "progress": progress,
                 "logs": self.logs[-100:],
             }
+            if extra:
+                data.update(extra)
             self.status_file.write_text(json.dumps(data, ensure_ascii=False), encoding="utf-8")
 
     def save_screenshot(self, page: Page, name: str):
@@ -220,12 +222,33 @@ def _capture_verification_screen(page: Page, status: UploadStatus) -> bool:
 def _is_on_verification_page(page: Page) -> bool:
     """LINE本人確認（2段階認証）画面にいるか判定する。"""
     try:
-        # 本人確認画面の特徴的なテキストを検出
         text = page.evaluate("document.body ? document.body.innerText : ''")
         verification_keywords = ["本人確認", "認証番号", "確認コード", "verification", "Enter code", "PinCode"]
         return any(kw.lower() in text.lower() for kw in verification_keywords)
     except Exception:
         return False
+
+
+def _extract_verification_code(page: Page) -> str:
+    """LINE本人確認画面から認証番号（4桁の数字）を抽出する。"""
+    try:
+        code = page.evaluate("""() => {
+            const allElements = document.querySelectorAll('*');
+            for (const el of allElements) {
+                const text = el.textContent.trim();
+                if (/^\\d{4}$/.test(text)) {
+                    const style = window.getComputedStyle(el);
+                    const fontSize = parseFloat(style.fontSize);
+                    if (fontSize >= 20) return text;
+                }
+            }
+            const bodyText = document.body.innerText;
+            const match = bodyText.match(/\\b(\\d{4})\\b/);
+            return match ? match[1] : '';
+        }""")
+        return code or ""
+    except Exception:
+        return ""
 
 
 def _fill_login_form(page: Page, email: str, password: str, status: UploadStatus) -> bool:
@@ -516,10 +539,11 @@ def wait_for_login(page: Page, status: UploadStatus, timeout: int = 300, email: 
 
             # 本人確認画面（2段階認証）を検出
             if _is_on_verification_page(page):
-                status.update("デバッグ", "本人確認画面を検出 → スクリーンショットをキャプチャ")
-                captured = _capture_verification_screen(page, status)
-                if captured:
-                    status.update("本人確認", "📱 LINEアプリで本人確認を行ってください（認証番号が表示されています）", 12)
+                status.update("デバッグ", "本人確認画面を検出 → 認証番号を抽出中")
+                _capture_verification_screen(page, status)
+                code = _extract_verification_code(page)
+                if code:
+                    status.update("本人確認", f"🔢 認証番号: {code}  ← LINEアプリに入力してください", 12, extra={"verification_code": code})
                 else:
                     status.update("本人確認", "📱 LINEアプリで本人確認を行ってください", 12)
 
@@ -531,8 +555,12 @@ def wait_for_login(page: Page, status: UploadStatus, timeout: int = 300, email: 
                     time.sleep(verify_interval)
                     verify_elapsed += verify_interval
 
-                    # 定期的にスクリーンショットを更新
-                    if verify_elapsed % 10 < verify_interval:
+                    # 認証番号が更新される場合に備えて再取得
+                    if verify_elapsed % 15 < verify_interval:
+                        new_code = _extract_verification_code(page)
+                        if new_code and new_code != code:
+                            code = new_code
+                            status.update("本人確認", f"🔢 認証番号: {code}  ← LINEアプリに入力してください", 12, extra={"verification_code": code})
                         _capture_verification_screen(page, status)
 
                     # ダッシュボードに到達した？

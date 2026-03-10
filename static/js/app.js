@@ -588,24 +588,26 @@ function startStatusPolling() {
         waitingCount = 0; // 有効なステップが来たらリセット
       }
 
-      // 本人確認画面 → 認証番号のスクリーンショットを表示
+      // 本人確認画面 → 認証番号を大きく表示
       if (data.step === "本人確認") {
         const uploading = $("#line-uploading");
         if (uploading) uploading.hidden = false;
         const waiting = $("#line-waiting");
         if (waiting) waiting.hidden = true;
-        // タイトルとメッセージを更新
+        // タイトルを更新
         const loginTitle = $("#line-login-title");
         const loginDesc = $("#line-login-desc");
         if (loginTitle) loginTitle.textContent = "本人確認が必要です";
-        if (loginDesc) loginDesc.textContent = "LINEアプリを開いて、表示されている認証番号を入力してください";
-        // スクリーンショット画像を表示（qr-code 画像パスを再利用）
+        // 認証番号をテキストで大きく表示
         const verifyDisplay = $("#verify-display");
-        const verifyImg = $("#verify-screenshot");
-        if (verifyDisplay && verifyImg) {
-          loadImage(verifyImg, `/api/qr-code/${state.sessionId}?t=${Date.now()}`);
+        const codeEl = $("#verify-code");
+        if (verifyDisplay) {
           verifyDisplay.hidden = false;
+          if (data.verification_code && codeEl) {
+            codeEl.textContent = data.verification_code;
+          }
         }
+        if (loginDesc) loginDesc.textContent = "LINEアプリを開いて、上の認証番号を入力してください";
       }
 
       // ログイン完了後 → 待機画面に切り替え
