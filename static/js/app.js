@@ -449,6 +449,12 @@ function initLineUpload() {
     const title = $("#stamp-title").value.trim() || "ペットスタンプ";
     const desc = $("#stamp-desc").value.trim() || "かわいいペットのスタンプです";
 
+    // セッションIDが無効な場合はエラー
+    if (!state.sessionId || state.sessionId === "null" || state.sessionId === "undefined") {
+      alert("セッションが無効です。ページをリロードしてやり直してください。");
+      return;
+    }
+
     // 通知パーミッションをリクエスト（初回のみ）
     requestNotificationPermission();
 
@@ -483,10 +489,21 @@ let statusPollTimer = null;
 function startStatusPolling() {
   if (statusPollTimer) clearInterval(statusPollTimer);
 
+  // セッションIDが無効な場合はポーリングしない
+  if (!state.sessionId || state.sessionId === "null" || state.sessionId === "undefined") {
+    return;
+  }
+
+  let waitingCount = 0; // 「待機中」が続いた回数
+  const MAX_WAITING = 60; // 120秒(2秒×60回)でタイムアウト
+  let networkErrorCount = 0;
+  const MAX_NETWORK_ERRORS = 10;
+
   statusPollTimer = setInterval(async () => {
     try {
       const res = await fetch(`/api/upload-status/${state.sessionId}`);
       const data = await res.json();
+      networkErrorCount = 0; // ネットワーク成功でリセット
 
       const statusEl = $("#line-upload-status-text");
       if (statusEl) {
@@ -505,8 +522,29 @@ function startStatusPolling() {
         logsEl.scrollTop = logsEl.scrollHeight;
       }
 
+      // 「待機中」が長く続いた場合 → 処理が開始されていないためエラー表示
+      if (data.step === "待機中") {
+        waitingCount++;
+        if (waitingCount >= MAX_WAITING) {
+          clearInterval(statusPollTimer);
+          statusPollTimer = null;
+          if (statusEl) {
+            statusEl.textContent = "処理がタイムアウトしました。ページをリロードしてやり直してください。";
+          }
+          const uploading = $("#line-uploading");
+          const waiting = $("#line-waiting");
+          if (waiting && !waiting.hidden) {
+            waiting.hidden = true;
+            if (uploading) uploading.hidden = false;
+          }
+          return;
+        }
+      } else {
+        waitingCount = 0; // 有効なステップが来たらリセット
+      }
+
       // ログイン完了後 → 待機画面に切り替え
-      const waitingSteps = ["自動処理中", "画像アップ", "審査準備中"];
+      const waitingSteps = ["自動処理中", "画像アップ", "審査準備中", "開始", "ログイン"];
       if (waitingSteps.includes(data.step)) {
         const uploading = $("#line-uploading");
         const waiting = $("#line-waiting");
@@ -537,21 +575,40 @@ function startStatusPolling() {
         notifyComplete();
       }
 
-      // エラー・中断 → ポーリング停止、進行状況画面のまま表示
+      // エラー・中断 → ポーリング停止、エラーメッセージ表示
       if (data.step === "エラー" || data.step === "中断") {
         clearInterval(statusPollTimer);
         statusPollTimer = null;
-        // 待機画面が出ていたら進行状況画面に戻す（エラーが見えるように）
         const waiting = $("#line-waiting");
         const uploading = $("#line-uploading");
         if (waiting && !waiting.hidden) {
           waiting.hidden = true;
           if (uploading) uploading.hidden = false;
         }
+        if (statusEl) {
+          statusEl.textContent = data.message || "エラーが発生しました。もう一度お試しください。";
+          statusEl.style.color = "#e74c3c";
+        }
         loadDebugScreenshots();
       }
     } catch (e) {
-      // ネットワークエラーは無視して次のポーリングを待つ
+      // ネットワークエラーが連続した場合はポーリング停止
+      networkErrorCount++;
+      if (networkErrorCount >= MAX_NETWORK_ERRORS) {
+        clearInterval(statusPollTimer);
+        statusPollTimer = null;
+        const statusEl = $("#line-upload-status-text");
+        if (statusEl) {
+          statusEl.textContent = "通信エラーが発生しました。ページをリロードしてやり直してください。";
+          statusEl.style.color = "#e74c3c";
+        }
+        const waiting = $("#line-waiting");
+        const uploading = $("#line-uploading");
+        if (waiting && !waiting.hidden) {
+          waiting.hidden = true;
+          if (uploading) uploading.hidden = false;
+        }
+      }
     }
   }, 2000);
 }
