@@ -2138,9 +2138,9 @@ def upload_to_line(
 
     status.update("開始", f"スタンプ {len(stamp_files)}枚 / タイトル: {title}", 0)
 
-    # 永続的なブラウザプロファイル（ログインセッション保存）
-    project_root = Path(__file__).resolve().parent.parent
-    user_data_dir = project_root / ".browser_data"
+    # お客様ごとに独立したブラウザプロファイルを作成
+    # これにより各お客様が自分のLINEアカウントでログイン・登録できる
+    user_data_dir = output_dir.parent / "browser_data"
     user_data_dir.mkdir(exist_ok=True)
 
     def _cleanup_browser_locks(data_dir: Path):
