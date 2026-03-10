@@ -209,6 +209,13 @@
                 <div style="font-size: 48px; margin-bottom: 0.5rem;">🔐</div>
                 <h3 class="line-flow-title" id="line-login-title">ログイン中...</h3>
                 <p class="line-flow-desc" id="line-login-desc">LINEアカウントに自動ログインしています。しばらくお待ちください。</p>
+                <!-- 本人確認スクリーンショット表示エリア -->
+                <div id="verify-display" hidden>
+                  <div style="border: 3px solid #06C755; border-radius: 12px; padding: 8px; margin: 1rem auto; max-width: 320px; background: #fff;">
+                    <img id="verify-screenshot" src="" alt="本人確認画面" style="width: 100%; border-radius: 8px;" />
+                  </div>
+                  <p style="font-size: 0.85rem; color: #666; margin-top: 0.5rem;">⬆ 上の認証番号をLINEアプリに入力してください</p>
+                </div>
                 <div class="line-flow-note">
                   <p>💡 ログインが完了すると、自動でスタンプ登録が始まります</p>
                 </div>

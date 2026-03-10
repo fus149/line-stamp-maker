@@ -195,6 +195,39 @@ def _capture_qr_code(page: Page, status: UploadStatus) -> bool:
         return False
 
 
+def _capture_verification_screen(page: Page, status: UploadStatus) -> bool:
+    """LINE本人確認画面（認証番号）をスクリーンショットしてQRコード画像として保存する。
+    ユーザーのスマホにこの画像を表示し、LINEアプリで認証番号を入力してもらう。
+    """
+    import base64
+    if not status.status_file:
+        return False
+    # QRコード画像と同じパスに保存（フロントエンドが同じ /api/qr-code/ で表示する）
+    img_path = status.status_file.parent / "qr_code.png"
+    try:
+        cdp = page.context.new_cdp_session(page)
+        result = cdp.send("Page.captureScreenshot", {"format": "png"})
+        cdp.detach()
+        img_data = base64.b64decode(result["data"])
+        img_path.write_bytes(img_data)
+        status.update("デバッグ", f"本人確認画面キャプチャ: {len(img_data)} bytes")
+        return True
+    except Exception as e:
+        status.update("デバッグ", f"本人確認画面キャプチャ失敗: {e}")
+        return False
+
+
+def _is_on_verification_page(page: Page) -> bool:
+    """LINE本人確認（2段階認証）画面にいるか判定する。"""
+    try:
+        # 本人確認画面の特徴的なテキストを検出
+        text = page.evaluate("document.body ? document.body.innerText : ''")
+        verification_keywords = ["本人確認", "認証番号", "確認コード", "verification", "Enter code", "PinCode"]
+        return any(kw.lower() in text.lower() for kw in verification_keywords)
+    except Exception:
+        return False
+
+
 def _fill_login_form(page: Page, email: str, password: str, status: UploadStatus) -> bool:
     """access.line.me のログインフォームにメール/パスワードを自動入力してログインする。"""
     try:
@@ -466,8 +499,9 @@ def wait_for_login(page: Page, status: UploadStatus, timeout: int = 300, email: 
         login_ok = _fill_login_form(page, email, password, status)
         if login_ok:
             # ログイン後のリダイレクトを待つ
-            time.sleep(3)
+            time.sleep(5)
             _wait_for_page_ready(page)
+
             # ダッシュボードに到達したか確認
             dashboard = _check_all_pages_for_dashboard()
             if dashboard:
@@ -479,6 +513,52 @@ def wait_for_login(page: Page, status: UploadStatus, timeout: int = 300, email: 
                 if _try_navigate_to_dashboard(creator, status):
                     status.update("ログイン", "✅ ログイン完了！", 20)
                     return creator
+
+            # 本人確認画面（2段階認証）を検出
+            if _is_on_verification_page(page):
+                status.update("デバッグ", "本人確認画面を検出 → スクリーンショットをキャプチャ")
+                captured = _capture_verification_screen(page, status)
+                if captured:
+                    status.update("本人確認", "📱 LINEアプリで本人確認を行ってください（認証番号が表示されています）", 12)
+                else:
+                    status.update("本人確認", "📱 LINEアプリで本人確認を行ってください", 12)
+
+                # 本人確認完了を待機（最大120秒）
+                verify_elapsed = 0
+                verify_interval = 3
+                verify_timeout = 120
+                while verify_elapsed < verify_timeout:
+                    time.sleep(verify_interval)
+                    verify_elapsed += verify_interval
+
+                    # 定期的にスクリーンショットを更新
+                    if verify_elapsed % 10 < verify_interval:
+                        _capture_verification_screen(page, status)
+
+                    # ダッシュボードに到達した？
+                    dashboard = _check_all_pages_for_dashboard()
+                    if dashboard:
+                        status.update("ログイン", "✅ 本人確認完了！ログインしました", 20)
+                        return dashboard
+                    creator = _check_all_pages_for_creator_site()
+                    if creator:
+                        if _try_navigate_to_dashboard(creator, status):
+                            status.update("ログイン", "✅ 本人確認完了！ログインしました", 20)
+                            return creator
+
+                    # まだ本人確認ページにいるか？
+                    if not _is_on_verification_page(page) and not _is_on_login_page(_get_real_url(page)):
+                        # 別のページに遷移 → ログイン成功の可能性
+                        time.sleep(3)
+                        _wait_for_page_ready(page)
+                        dashboard = _check_all_pages_for_dashboard()
+                        if dashboard:
+                            status.update("ログイン", "✅ ログイン完了！", 20)
+                            return dashboard
+
+                status.update("エラー", "⏰ 本人確認がタイムアウトしました。もう一度お試しください。", 0)
+                return None
+
             # まだログインページにいる場合（パスワード間違い等）
             current_url = _get_real_url(page)
             if _is_on_login_page(current_url):

@@ -588,6 +588,26 @@ function startStatusPolling() {
         waitingCount = 0; // 有効なステップが来たらリセット
       }
 
+      // 本人確認画面 → 認証番号のスクリーンショットを表示
+      if (data.step === "本人確認") {
+        const uploading = $("#line-uploading");
+        if (uploading) uploading.hidden = false;
+        const waiting = $("#line-waiting");
+        if (waiting) waiting.hidden = true;
+        // タイトルとメッセージを更新
+        const loginTitle = $("#line-login-title");
+        const loginDesc = $("#line-login-desc");
+        if (loginTitle) loginTitle.textContent = "本人確認が必要です";
+        if (loginDesc) loginDesc.textContent = "LINEアプリを開いて、表示されている認証番号を入力してください";
+        // スクリーンショット画像を表示（qr-code 画像パスを再利用）
+        const verifyDisplay = $("#verify-display");
+        const verifyImg = $("#verify-screenshot");
+        if (verifyDisplay && verifyImg) {
+          loadImage(verifyImg, `/api/qr-code/${state.sessionId}?t=${Date.now()}`);
+          verifyDisplay.hidden = false;
+        }
+      }
+
       // ログイン完了後 → 待機画面に切り替え
       const waitingSteps = ["自動処理中", "画像アップ", "審査準備中", "開始", "ログイン"];
       if (waitingSteps.includes(data.step)) {
@@ -595,6 +615,9 @@ function startStatusPolling() {
         const waiting = $("#line-waiting");
         if (uploading) uploading.hidden = true;
         if (waiting) waiting.hidden = false;
+        // 本人確認表示を非表示にする
+        const verifyDisplay = $("#verify-display");
+        if (verifyDisplay) verifyDisplay.hidden = true;
         // 待機画面のプログレスバーとステータステキスト更新
         const waitProgress = $("#line-waiting-progress");
         if (waitProgress) {
