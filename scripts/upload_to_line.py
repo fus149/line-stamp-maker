@@ -1604,7 +1604,7 @@ def upload_images(page: Page, output_dir: Path, status: UploadStatus):
     # 証拠(session b45b0b87): 保存後は表示情報タブのままでfile input数=0
     try:
         # SPAナビゲーション: URLフラグメントで#/imageに遷移
-        current_url = page.url
+        current_url = _get_real_url(page)
         if "#/image" not in current_url:
             # まずタブクリックを試行
             tab_clicked = False
@@ -1662,7 +1662,7 @@ def upload_images(page: Page, output_dir: Path, status: UploadStatus):
         if not edit_clicked:
             # URLに#/editを付与して試行
             try:
-                current_url = page.url
+                current_url = _get_real_url(page)
                 base_url = current_url.split("#")[0]
                 page.goto(f"{base_url}#/image/edit", timeout=15000)
                 status.update("画像アップ", "画像の編集モードに移行中...")
@@ -1828,10 +1828,10 @@ def _submit_review_request(page: Page, status: UploadStatus) -> bool:
 
     # 画像アップロード後のページURLからsticker IDを取得
     # 例: /my/{userId}/sticker/{stickerId}/...
-    match = re.search(r"/sticker/(\d+)", page.url)
+    match = re.search(r"/sticker/(\d+)", _get_real_url(page))
     if not match:
         status.update("エラー", "スタンプの登録に問題が発生しました。もう一度お試しください。")
-        return
+        return False
 
     sticker_id = match.group(1)
     status.update("デバッグ", f"スタンプID: {sticker_id}")
