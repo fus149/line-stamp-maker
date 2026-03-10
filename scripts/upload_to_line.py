@@ -116,41 +116,78 @@ def _hide_browser(page: Page, status: UploadStatus):
 def _capture_qr_code(page: Page, status: UploadStatus) -> bool:
     """access.line.meのログインページからQRコードをキャプチャしてセッションディレクトリに保存。
     スマホユーザーがLINEアプリでスキャンしてログインできるようにする。
+
+    CDP Page.captureScreenshot を使用するため、ブラウザが最小化・画面外でも動作する。
     戻り値: QRコード画像の保存に成功したらTrue。
     """
+    import base64
+
     if not status.status_file:
         return False
 
     qr_path = status.status_file.parent / "qr_code.png"
 
     try:
-        # LINEログインページのQRコード要素を探す
-        # access.line.me のQRコードは複数のセレクタで配置される可能性がある
-        qr_selectors = [
-            "div.qr_code img",           # QRコード画像（imgタグ）
-            "div.qr_code canvas",         # QRコード（canvasタグ）
-            "div.qr_code_area img",       # 別パターン
-            "div.qr_code_area canvas",    # 別パターン
-            "#qr_code img",              # ID指定パターン
-            "#qr_code canvas",           # ID指定パターン
-            "div[class*='qr'] img",      # クラス名にqrを含むdiv内のimg
-            "div[class*='qr'] canvas",   # クラス名にqrを含むdiv内のcanvas
-            "img[alt*='QR']",            # altにQRを含むimg
-        ]
+        # Step 1: QRコード要素の位置を JavaScript で取得
+        # access.line.me のQRログインページの要素構造を調査
+        qr_bounds = page.evaluate("""() => {
+            // QRコード要素を探す（複数パターン対応）
+            const selectors = [
+                'div.qr_code canvas',
+                'div.qr_code img',
+                'div[class*="qr"] canvas',
+                'div[class*="qr"] img',
+                '#qr_code canvas',
+                '#qr_code img',
+                'canvas[class*="qr"]',
+                'img[alt*="QR"]',
+                'img[src*="qr"]',
+                // LINE login page specific
+                'div[class*="QR"] canvas',
+                'div[class*="QR"] img',
+                '[data-testid*="qr"]',
+            ];
+            for (const sel of selectors) {
+                const el = document.querySelector(sel);
+                if (el) {
+                    const rect = el.getBoundingClientRect();
+                    if (rect.width > 10 && rect.height > 10) {
+                        return {x: rect.x, y: rect.y, w: rect.width, h: rect.height, sel: sel};
+                    }
+                }
+            }
+            return null;
+        }""")
 
-        for selector in qr_selectors:
-            try:
-                el = page.locator(selector).first
-                if el.is_visible(timeout=1000):
-                    el.screenshot(path=str(qr_path), timeout=5000)
-                    status.update("デバッグ", f"QRコード取得成功: selector={selector}")
-                    return True
-            except Exception:
-                continue
+        # Step 2: CDP でスクリーンショットを取得（最小化・画面外でも動作）
+        cdp = page.context.new_cdp_session(page)
 
-        # フォールバック: QRコード要素が特定できない場合、ページ全体のスクリーンショット
-        status.update("デバッグ", "QRコード要素が見つからないため、ページ全体をキャプチャ")
-        page.screenshot(path=str(qr_path), full_page=False, timeout=5000)
+        if qr_bounds:
+            # QRコード要素のみをクリップしてキャプチャ
+            status.update("デバッグ", f"QRコード要素発見: {qr_bounds['sel']} ({qr_bounds['w']}x{qr_bounds['h']})")
+            # 余白を少し追加
+            margin = 10
+            result = cdp.send("Page.captureScreenshot", {
+                "format": "png",
+                "clip": {
+                    "x": max(0, qr_bounds["x"] - margin),
+                    "y": max(0, qr_bounds["y"] - margin),
+                    "width": qr_bounds["w"] + margin * 2,
+                    "height": qr_bounds["h"] + margin * 2,
+                    "scale": 1,
+                },
+            })
+        else:
+            # フォールバック: ページ全体をキャプチャ
+            status.update("デバッグ", "QRコード要素が特定できないため、ページ全体をCDPキャプチャ")
+            result = cdp.send("Page.captureScreenshot", {"format": "png"})
+
+        cdp.detach()
+
+        # 画像を保存
+        img_data = base64.b64decode(result["data"])
+        qr_path.write_bytes(img_data)
+        status.update("デバッグ", f"QRコード画像保存: {len(img_data)} bytes")
         return True
 
     except Exception as e:
@@ -2195,10 +2232,10 @@ def upload_to_line(
         page = context.new_page()
         status.update("デバッグ", "新しいページ作成完了")
 
-        # ブラウザを即座に最小化（--start-minimizedのフォールバック）
-        # スマホからの利用時にPCにブラウザが表示されないようにする
-        # 手動ログインが必要な場合のみ wait_for_login 内で bring_to_front する
-        _hide_browser(page, status)
+        # ブラウザは --window-position=-32000,-32000 で画面外に配置済み。
+        # ここで _hide_browser（CDP minimize）は呼ばない。
+        # 理由: 最小化するとスクリーンショット（QRコード取得）が不可能になる。
+        # ログイン確認後に wait_for_login 内で _hide_browser を呼ぶ。
 
         # ============================================================
         # 全ページに対してモーダル自動非表示CSS/JSを注入
