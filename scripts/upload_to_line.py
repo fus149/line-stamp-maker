@@ -912,62 +912,45 @@ def navigate_to_new_sticker(page: Page, status: UploadStatus) -> bool:
     """スタンプ新規作成ページに遷移する。"""
     status.update("自動処理中", "新規登録ページに移動中...", 25)
 
-    # ダッシュボードにいる場合、「新規登録」のhrefを取得して直接遷移
+    on_create_page = False
+
+    # 方法1: /create ページに直接遷移
     try:
-        create_href = page.evaluate("""
-            (() => {
-                const links = document.querySelectorAll('a[href]');
-                for (const el of links) {
-                    const text = (el.textContent || '').trim();
-                    if (text.includes('新規登録')) return el.href;
-                }
-                return null;
-            })()
-        """)
-        if create_href:
-            page.goto(create_href, wait_until="domcontentloaded", timeout=30000)
-            time.sleep(3)
-            _wait_for_page_ready(page)
-            if "/create" in page.url:
-                status.save_screenshot(page, "03_direct_nav")
-                status.update("デバッグ", f"直接遷移成功: {page.url}")
-                return True
-    except Exception as e:
-        status.update("デバッグ", f"href直接遷移失敗: {e}")
-
-    # フォールバック: ダッシュボード経由
-    if not _ensure_on_dashboard(page, status):
-        status.update("エラー", "ダッシュボードに到達できませんでした。もう一度お試しください。")
-        status.save_screenshot(page, "03_dashboard_fail")
-        return False
-
-    _wait_for_page_ready(page)
-    time.sleep(2)
-    _dismiss_all_modals(page, status)
-    status.save_screenshot(page, "03_dashboard")
-
-    # ---- 「新規登録」ボタンをクリック ----
-    status.update("自動処理中", "新規登録の準備中...", 27)
-
-    if not _click_new_registration(page, status):
-        status.save_screenshot(page, "03_new_reg_failed")
-        status.dump_page_info(page, "新規登録失敗")
-        status.update("エラー", "新規登録ページに移動できませんでした。もう一度お試しください。")
-        return False
-
-    # 404ページに飛んでしまった場合はダッシュボードに戻ってリトライ
-    page_text = (page.text_content("body") or "")[:500]
-    if "存在しません" in page_text or "404" in page.title():
-        status.update("自動処理中", "ページを再読み込みしています...", 27)
-        if _ensure_on_dashboard(page, status):
-            _dismiss_all_modals(page, status)
-            time.sleep(1)
+        page.goto("https://creator.line.me/my/sticker/new/", wait_until="domcontentloaded", timeout=30000)
+        time.sleep(3)
+        _wait_for_page_ready(page)
+        actual_url = _get_real_url(page)
+        status.save_screenshot(page, "03_direct_nav")
+        status.update("デバッグ", f"直接遷移後URL: {actual_url}")
+        if "/new" in actual_url or "/create" in actual_url:
+            on_create_page = True
         else:
+            status.update("デバッグ", "直接遷移失敗、ダッシュボード経由に切り替え")
+    except Exception as e:
+        status.update("デバッグ", f"直接遷移失敗: {e}")
+
+    # 方法2: ダッシュボード経由
+    if not on_create_page:
+        if not _ensure_on_dashboard(page, status):
+            status.update("エラー", "ダッシュボードに到達できませんでした。もう一度お試しください。")
             return False
 
+        _wait_for_page_ready(page)
+        time.sleep(2)
+        _dismiss_all_modals(page, status)
+        status.save_screenshot(page, "03_dashboard")
+
+        status.update("自動処理中", "新規登録の準備中...", 27)
+        if not _click_new_registration(page, status):
+            status.save_screenshot(page, "03_new_reg_failed")
+            status.update("エラー", "新規登録ページに移動できませんでした。もう一度お試しください。")
+            return False
+
+        time.sleep(3)
+        _wait_for_page_ready(page)
+
     status.save_screenshot(page, "04_after_new_reg_click")
-    status.update("デバッグ", f"新規登録クリック後: {page.url}")
-    status.dump_page_info(page, "新規登録後")
+    status.update("デバッグ", f"作成ページURL: {_get_real_url(page)}")
 
     # ---- スタンプタイプ選択 ----
     # /create ページでは スタンプ/絵文字/着せかえ の3つのボタンが表示される
@@ -1023,11 +1006,28 @@ def navigate_to_new_sticker(page: Page, status: UploadStatus) -> bool:
     current_url = page.url
     status.update("デバッグ", f"最終URL: {current_url}")
 
-    form_count = page.locator("input[type='text'], textarea, input[type='file'], select").count()
-    if form_count > 0:
+    # スタンプ作成フォームの判定: ダッシュボードの検索欄等を誤検出しないよう厳密に判定
+    # スタンプ作成フォームには textarea（説明文欄）が必ず存在する
+    textarea_count = page.locator("textarea").count()
+    # またはURLに /new/ や /edit が含まれる（作成・編集ページの証拠）
+    is_create_page = "/new" in current_url or "/edit" in current_url or "/create/sticker" in current_url
+
+    if textarea_count > 0 or is_create_page:
         status.update("自動処理中", "スタンプ情報の入力を準備中...", 35)
         status.save_screenshot(page, "05_form_found")
         return True
+
+    # /create にいるがフォームがまだ表示されていない場合
+    # → スタンプタイプ選択ボタンが表示されている可能性
+    if "/create" in current_url:
+        status.update("デバッグ", "/createページにいるがフォーム未表示。ページ全体を再確認...")
+        status.save_screenshot(page, "05_create_no_form")
+        # 待ってリトライ
+        time.sleep(3)
+        textarea_count = page.locator("textarea").count()
+        if textarea_count > 0:
+            status.save_screenshot(page, "05_form_found_retry")
+            return True
 
     status.save_screenshot(page, "05_no_form")
     status.dump_page_info(page, "フォーム未検出")
@@ -2021,8 +2021,6 @@ def upload_to_line(
             except Exception as e:
                 status.update("デバッグ", f"新規登録URL取得失敗: {e}")
 
-            # ブラウザを裏に移動
-            _hide_browser(page, status)
             status.update("自動処理中", "スタンプを自動登録しています。このページはそのままでお待ちください...", 25)
 
             # Step 2: スタンプ作成ページへ遷移
@@ -2045,6 +2043,9 @@ def upload_to_line(
                 status.update("エラー", "スタンプ作成ページに到達できませんでした。もう一度お試しください。")
                 status.save_screenshot(page, "99_final_error")
                 return False
+
+            # ナビゲーション完了後にブラウザを最小化
+            _hide_browser(page, status)
 
             # Step 4: スタンプ情報入力
             fill_sticker_info(page, title, description, status)
