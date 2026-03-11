@@ -156,12 +156,20 @@
               <p class="line-flow-desc">LINE Creators Market に登録するスタンプの情報です（英語で入力）</p>
               <div class="input-list">
                 <div class="input-row">
-                  <span class="input-num">1</span>
-                  <input type="text" id="stamp-title" class="msg-input" value="Pet Stickers" placeholder="Stamp Title (English)" />
+                  <span class="input-num">📝</span>
+                  <div style="flex:1">
+                    <label for="stamp-title" style="font-size:0.8rem; color:#888; margin-bottom:0.2rem; display:block;">タイトル</label>
+                    <input type="text" id="stamp-title" class="msg-input" value="Pet Stickers" placeholder="例: My Cat Stickers" />
+                    <p class="input-error" id="stamp-title-error" hidden>⚠ 英語（半角英数字）で入力してください</p>
+                  </div>
                 </div>
                 <div class="input-row">
-                  <span class="input-num">2</span>
-                  <input type="text" id="stamp-desc" class="msg-input" value="Cute pet stickers" placeholder="Description (English)" />
+                  <span class="input-num">💬</span>
+                  <div style="flex:1">
+                    <label for="stamp-desc" style="font-size:0.8rem; color:#888; margin-bottom:0.2rem; display:block;">説明</label>
+                    <input type="text" id="stamp-desc" class="msg-input" value="Cute pet stickers" placeholder="例: Adorable stickers of my pet" />
+                    <p class="input-error" id="stamp-desc-error" hidden>⚠ 英語（半角英数字）で入力してください</p>
+                  </div>
                 </div>
               </div>
               <h3 class="line-flow-title" style="margin-top: 1.5rem;">LINEアカウントでログイン</h3>

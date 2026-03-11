@@ -478,9 +478,41 @@ function initLineUpload() {
     $("#btn-upload-line").hidden = false;
   });
 
+  // --- 英語バリデーション ---
+  function hasJapanese(text) {
+    return /[^\x00-\x7F]/.test(text);
+  }
+
+  function validateEnglishInput(inputEl, errorEl) {
+    const val = inputEl.value.trim();
+    if (val && hasJapanese(val)) {
+      inputEl.classList.add("input-invalid");
+      errorEl.hidden = false;
+      return false;
+    } else {
+      inputEl.classList.remove("input-invalid");
+      errorEl.hidden = true;
+      return true;
+    }
+  }
+
+  const stampTitle = $("#stamp-title");
+  const stampDesc = $("#stamp-desc");
+  const titleError = $("#stamp-title-error");
+  const descError = $("#stamp-desc-error");
+
+  stampTitle.addEventListener("input", () => validateEnglishInput(stampTitle, titleError));
+  stampDesc.addEventListener("input", () => validateEnglishInput(stampDesc, descError));
+
   $("#btn-start-upload").addEventListener("click", async () => {
-    const title = $("#stamp-title").value.trim() || "ペットスタンプ";
-    const desc = $("#stamp-desc").value.trim() || "かわいいペットのスタンプです";
+    const titleOk = validateEnglishInput(stampTitle, titleError);
+    const descOk = validateEnglishInput(stampDesc, descError);
+    if (!titleOk || !descOk) {
+      return;
+    }
+
+    const title = stampTitle.value.trim() || "Pet Stickers";
+    const desc = stampDesc.value.trim() || "Cute pet stickers";
     const email = $("#line-email").value.trim();
     const password = $("#line-password").value;
 
