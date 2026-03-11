@@ -38,6 +38,24 @@ SESSIONS_DIR = PROJECT_ROOT / "sessions"
 SESSIONS_DIR.mkdir(exist_ok=True)
 
 app.mount("/static", StaticFiles(directory=str(PROJECT_ROOT / "static")), name="static")
+
+
+from starlette.middleware.base import BaseHTTPMiddleware
+from starlette.requests import Request as StarletteRequest
+from starlette.responses import Response
+
+
+class NoCacheStaticMiddleware(BaseHTTPMiddleware):
+    """静的ファイルにno-cacheヘッダーを付与してブラウザキャッシュを防止する。"""
+    async def dispatch(self, request: StarletteRequest, call_next):
+        response: Response = await call_next(request)
+        if request.url.path.startswith("/static/"):
+            response.headers["Cache-Control"] = "no-cache, no-store, must-revalidate"
+            response.headers["Pragma"] = "no-cache"
+        return response
+
+
+app.add_middleware(NoCacheStaticMiddleware)
 templates = Jinja2Templates(directory=str(PROJECT_ROOT / "templates"))
 
 # サーバー起動時刻をキャッシュバスターに使用（別PCでも最新CSS/JSを確実に読み込む）
