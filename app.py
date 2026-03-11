@@ -79,6 +79,14 @@ async def index(request: Request):
     return response
 
 
+@app.get("/guide")
+async def guide(request: Request):
+    response = templates.TemplateResponse("guide.html", {"request": request})
+    response.headers["Cache-Control"] = "no-cache, no-store, must-revalidate"
+    response.headers["Pragma"] = "no-cache"
+    return response
+
+
 @app.get("/api/templates")
 async def get_templates():
     return {"templates": load_templates()}

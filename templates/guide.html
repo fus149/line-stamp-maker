@@ -1,0 +1,505 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>使い方ガイド - LINEスタンプ自動でつくるくん</title>
+  <style>
+    * { margin: 0; padding: 0; box-sizing: border-box; }
+    body {
+      font-family: -apple-system, BlinkMacSystemFont, "Hiragino Sans", "Noto Sans JP", sans-serif;
+      background: #f8f9fa;
+      color: #333;
+      line-height: 1.8;
+    }
+    .guide-header {
+      background: linear-gradient(135deg, #06C755 0%, #04a648 100%);
+      color: #fff;
+      padding: 2rem 1rem;
+      text-align: center;
+    }
+    .guide-header h1 {
+      font-size: 1.5rem;
+      margin-bottom: 0.3rem;
+    }
+    .guide-header p {
+      font-size: 0.9rem;
+      opacity: 0.9;
+    }
+    .guide-back {
+      display: inline-block;
+      color: #fff;
+      text-decoration: none;
+      font-size: 0.85rem;
+      margin-bottom: 0.5rem;
+      opacity: 0.8;
+    }
+    .guide-back:hover { opacity: 1; }
+    .guide-content {
+      max-width: 640px;
+      margin: 0 auto;
+      padding: 1.5rem 1rem 3rem;
+    }
+    .guide-toc {
+      background: #fff;
+      border-radius: 12px;
+      padding: 1.2rem 1.5rem;
+      margin-bottom: 2rem;
+      box-shadow: 0 1px 3px rgba(0,0,0,0.08);
+    }
+    .guide-toc h2 {
+      font-size: 1rem;
+      margin-bottom: 0.8rem;
+      color: #06C755;
+    }
+    .guide-toc ol {
+      padding-left: 1.2rem;
+    }
+    .guide-toc li {
+      margin-bottom: 0.4rem;
+    }
+    .guide-toc a {
+      color: #06C755;
+      text-decoration: none;
+    }
+    .guide-toc a:hover {
+      text-decoration: underline;
+    }
+    .guide-section {
+      background: #fff;
+      border-radius: 12px;
+      padding: 1.5rem;
+      margin-bottom: 1.5rem;
+      box-shadow: 0 1px 3px rgba(0,0,0,0.08);
+    }
+    .guide-section h2 {
+      font-size: 1.2rem;
+      color: #06C755;
+      margin-bottom: 1rem;
+      padding-bottom: 0.5rem;
+      border-bottom: 2px solid #e8f5e9;
+    }
+    .guide-section h3 {
+      font-size: 1rem;
+      margin: 1.2rem 0 0.5rem;
+      color: #444;
+    }
+    .step-box {
+      background: #f0faf3;
+      border-left: 4px solid #06C755;
+      padding: 1rem 1.2rem;
+      margin: 1rem 0;
+      border-radius: 0 8px 8px 0;
+    }
+    .step-box .step-num {
+      display: inline-block;
+      background: #06C755;
+      color: #fff;
+      width: 28px;
+      height: 28px;
+      border-radius: 50%;
+      text-align: center;
+      line-height: 28px;
+      font-size: 0.85rem;
+      font-weight: bold;
+      margin-right: 0.5rem;
+      flex-shrink: 0;
+    }
+    .step-box .step-title {
+      font-weight: bold;
+      font-size: 1rem;
+      display: flex;
+      align-items: center;
+      margin-bottom: 0.5rem;
+    }
+    .step-box p {
+      margin-left: 2.2rem;
+      font-size: 0.9rem;
+      color: #555;
+    }
+    .warn-box {
+      background: #fff8e1;
+      border-left: 4px solid #ffc107;
+      padding: 0.8rem 1rem;
+      margin: 0.8rem 0;
+      border-radius: 0 8px 8px 0;
+      font-size: 0.9rem;
+    }
+    .info-box {
+      background: #e3f2fd;
+      border-left: 4px solid #2196f3;
+      padding: 0.8rem 1rem;
+      margin: 0.8rem 0;
+      border-radius: 0 8px 8px 0;
+      font-size: 0.9rem;
+    }
+    .error-box {
+      background: #fce4ec;
+      border-left: 4px solid #e53935;
+      padding: 0.8rem 1rem;
+      margin: 0.8rem 0;
+      border-radius: 0 8px 8px 0;
+      font-size: 0.9rem;
+    }
+    .guide-section ul {
+      padding-left: 1.5rem;
+      margin: 0.5rem 0;
+    }
+    .guide-section li {
+      margin-bottom: 0.3rem;
+      font-size: 0.9rem;
+    }
+    .badge {
+      display: inline-block;
+      padding: 0.15rem 0.5rem;
+      border-radius: 4px;
+      font-size: 0.75rem;
+      font-weight: bold;
+      vertical-align: middle;
+    }
+    .badge-required { background: #e53935; color: #fff; }
+    .badge-optional { background: #bdbdbd; color: #fff; }
+    .badge-auto { background: #06C755; color: #fff; }
+    .faq-item {
+      margin-bottom: 1rem;
+    }
+    .faq-item summary {
+      cursor: pointer;
+      font-weight: bold;
+      font-size: 0.95rem;
+      padding: 0.5rem 0;
+      color: #333;
+    }
+    .faq-item summary:hover {
+      color: #06C755;
+    }
+    .faq-item p {
+      padding: 0.3rem 0 0.3rem 1rem;
+      font-size: 0.9rem;
+      color: #555;
+    }
+    .flow-chart {
+      text-align: center;
+      margin: 1rem 0;
+      font-size: 0.9rem;
+    }
+    .flow-chart .flow-step {
+      display: inline-block;
+      background: #06C755;
+      color: #fff;
+      padding: 0.4rem 1rem;
+      border-radius: 20px;
+      margin: 0.2rem;
+      font-size: 0.85rem;
+    }
+    .flow-chart .flow-arrow {
+      display: block;
+      color: #06C755;
+      font-size: 1.2rem;
+      margin: 0.2rem auto;
+    }
+    .guide-footer {
+      text-align: center;
+      padding: 2rem 1rem;
+    }
+    .guide-footer a {
+      display: inline-block;
+      background: #06C755;
+      color: #fff;
+      padding: 0.8rem 2rem;
+      border-radius: 30px;
+      text-decoration: none;
+      font-weight: bold;
+      font-size: 1rem;
+    }
+    .guide-footer a:hover {
+      background: #04a648;
+    }
+  </style>
+</head>
+<body>
+  <header class="guide-header">
+    <a href="/" class="guide-back">&larr; トップページに戻る</a>
+    <h1>🐾 使い方ガイド</h1>
+    <p>初めての方でも安心！ステップごとに解説します</p>
+  </header>
+
+  <div class="guide-content">
+
+    <!-- 目次 -->
+    <nav class="guide-toc">
+      <h2>📋 もくじ</h2>
+      <ol>
+        <li><a href="#about">このサービスについて</a></li>
+        <li><a href="#before">始める前に準備するもの</a></li>
+        <li><a href="#access">サイトにアクセスする</a></li>
+        <li><a href="#step1">写真をアップロードする</a></li>
+        <li><a href="#step2">メッセージを設定する</a></li>
+        <li><a href="#step3">スタンプを生成・編集する</a></li>
+        <li><a href="#step4">LINE Creators Marketに自動登録する</a></li>
+        <li><a href="#after">登録後の流れ</a></li>
+        <li><a href="#faq">よくある質問</a></li>
+      </ol>
+    </nav>
+
+    <!-- 1. このサービスについて -->
+    <section class="guide-section" id="about">
+      <h2>1. このサービスについて</h2>
+      <p>
+        「LINEスタンプ自動でつくるくん」は、ペットの写真8枚から
+        LINEスタンプを自動で作成し、LINE Creators Marketへの登録まで
+        すべて自動で行うサービスです。
+      </p>
+      <div class="flow-chart">
+        <span class="flow-step">📷 写真8枚を選ぶ</span>
+        <span class="flow-arrow">↓</span>
+        <span class="flow-step">💬 メッセージを選ぶ</span>
+        <span class="flow-arrow">↓</span>
+        <span class="flow-step">✨ スタンプ自動生成</span>
+        <span class="flow-arrow">↓</span>
+        <span class="flow-step">🔐 LINEログイン</span>
+        <span class="flow-arrow">↓</span>
+        <span class="flow-step">🚀 LINE自動登録・審査提出</span>
+      </div>
+      <p>所要時間は約<strong>5〜10分</strong>です。</p>
+    </section>
+
+    <!-- 2. 準備するもの -->
+    <section class="guide-section" id="before">
+      <h2>2. 始める前に準備するもの</h2>
+      <ul>
+        <li><strong>ペットの写真 8枚</strong>（JPG・PNG・WebP・HEIC対応）</li>
+        <li><strong>LINEアカウント</strong>（メールアドレスとパスワードを使います）</li>
+      </ul>
+
+      <div class="warn-box">
+        ⚠️ <strong>LINEのメールアドレスとパスワードが必要です。</strong><br />
+        LINEアプリ → 設定 → アカウント → メールアドレス で確認・設定できます。
+        パスワードを忘れた場合も同じ画面でリセットできます。
+      </div>
+
+      <div class="info-box">
+        💡 <strong>LINE Creators Marketに登録したことがなくても大丈夫です。</strong><br />
+        初回は自動でクリエイター登録を行います。メール確認が必要になる場合があります。
+      </div>
+    </section>
+
+    <!-- 3. サイトにアクセスする -->
+    <section class="guide-section" id="access">
+      <h2>3. サイトにアクセスする</h2>
+      <p>共有されたURLをスマホまたはPCのブラウザで開いてください。</p>
+
+      <h3>初回アクセス時の表示について</h3>
+      <div class="warn-box">
+        ⚠️ 初めてサイトにアクセスすると、以下のような確認画面が表示されることがあります。<br /><br />
+        <strong>「Visit Site」ボタン</strong>が表示された場合：<br />
+        → そのまま<strong>「Visit Site」をタップ</strong>してください。<br />
+        これはセキュリティ上の確認画面で、1回タップすれば次回からは表示されません。
+      </div>
+
+      <p>「Visit Site」をタップすると、スタンプ作成画面が表示されます。</p>
+    </section>
+
+    <!-- 4. 写真アップロード -->
+    <section class="guide-section" id="step1">
+      <h2>4. 写真をアップロードする</h2>
+
+      <div class="step-box">
+        <div class="step-title"><span class="step-num">1</span> 写真を選ぶ</div>
+        <p>「ファイルを選択」ボタンをタップして、ペットの写真を<strong>8枚</strong>選んでください。</p>
+      </div>
+
+      <div class="step-box">
+        <div class="step-title"><span class="step-num">2</span> 写真を確認する</div>
+        <p>選んだ写真がサムネイルで表示されます。削除したい場合は写真右上の「✕」をタップします。「8 / 8枚」になったら「次へ」をタップしてください。</p>
+      </div>
+
+      <div class="info-box">
+        💡 <strong>おすすめの写真</strong>：正面向き・全身が映っている写真がキレイなスタンプになります。背景は自動で切り抜かれます。
+      </div>
+    </section>
+
+    <!-- 5. メッセージ設定 -->
+    <section class="guide-section" id="step2">
+      <h2>5. メッセージを設定する</h2>
+      <p>スタンプに載せるメッセージの設定方法を4つから選べます。</p>
+
+      <div class="step-box">
+        <div class="step-title">🎲 ランダム <span class="badge badge-auto">おすすめ</span></div>
+        <p>おすすめメッセージから自動で8個選ばれます。何もしなくてOKです。</p>
+      </div>
+
+      <div class="step-box">
+        <div class="step-title">📋 テンプレから選ぶ</div>
+        <p>用意されたメッセージ一覧から好きなものを8個タップして選びます。</p>
+      </div>
+
+      <div class="step-box">
+        <div class="step-title">✏️ 自分で入力</div>
+        <p>オリジナルのメッセージを8個入力します。（最大20文字）</p>
+      </div>
+
+      <div class="step-box">
+        <div class="step-title">🖼️ 文字なし</div>
+        <p>メッセージなしの、画像だけのスタンプを作ります。</p>
+      </div>
+
+      <p>選んだら「スタンプを作る 🎉」をタップしてください。</p>
+    </section>
+
+    <!-- 6. 生成・編集 -->
+    <section class="guide-section" id="step3">
+      <h2>6. スタンプを生成・編集する</h2>
+
+      <div class="step-box">
+        <div class="step-title"><span class="step-num">1</span> 自動生成を待つ</div>
+        <p>背景の切り抜き・テキスト合成が自動で行われます。しばらくお待ちください。</p>
+      </div>
+
+      <div class="step-box">
+        <div class="step-title"><span class="step-num">2</span> 完成したスタンプを確認する</div>
+        <p>8枚のスタンプが一覧で表示されます。各スタンプをタップすると編集画面が開きます。</p>
+      </div>
+
+      <h3>編集機能について</h3>
+      <ul>
+        <li><strong>🧹 消しゴム</strong> — 不要な部分（背景の残り等）を消せます</li>
+        <li><strong>✋ 移動・拡大</strong> — 画像の位置や大きさを調整できます</li>
+        <li><strong>✏️ テキスト</strong> — メッセージの文字、フォント、色、位置を変更できます</li>
+      </ul>
+
+      <div class="info-box">
+        💡 編集は任意です。そのままでOKなら編集せずに次に進めます。
+      </div>
+    </section>
+
+    <!-- 7. LINE自動登録 -->
+    <section class="guide-section" id="step4">
+      <h2>7. LINE Creators Marketに自動登録する</h2>
+
+      <div class="step-box">
+        <div class="step-title"><span class="step-num">1</span> 「LINE Creators Market に自動登録」をタップ</div>
+        <p>スタンプ一覧の下にある緑色のボタンをタップすると、登録フォームが開きます。</p>
+      </div>
+
+      <div class="step-box">
+        <div class="step-title"><span class="step-num">2</span> スタンプ情報を入力する</div>
+        <p>
+          <strong>📝 タイトル</strong>と<strong>💬 説明</strong>を<strong>英語</strong>で入力してください。<br />
+          （例: タイトル「My Cat Stickers」、説明「Adorable stickers of my cat」）<br />
+          ※ 日本語を入力するとエラーが表示されます。これはLINE Creators Marketの仕様です。
+        </p>
+      </div>
+
+      <div class="step-box">
+        <div class="step-title"><span class="step-num">3</span> LINEログイン情報を入力する</div>
+        <p>
+          LINEに登録しているメールアドレスとパスワードを入力してください。<br />
+        </p>
+      </div>
+
+      <div class="info-box">
+        🔒 <strong>安心してください。</strong>ログイン情報はLINEへのログインにのみ使用され、サーバーには保存されません。
+      </div>
+
+      <div class="step-box">
+        <div class="step-title"><span class="step-num">4</span> 「自動登録を開始」をタップ</div>
+        <p>ここからは自動で処理が進みます。画面はそのままにしてお待ちください。</p>
+      </div>
+
+      <h3>本人確認が表示された場合</h3>
+      <div class="warn-box">
+        🔢 <strong>4桁の認証番号</strong>が画面に大きく表示されます。<br /><br />
+        <strong>やること</strong>：スマホの<strong>LINEアプリ</strong>を開いて、表示された番号を入力してください。<br />
+        入力が完了すると、自動で次のステップに進みます。
+      </div>
+
+      <h3>自動処理の流れ</h3>
+      <p>「自動登録を開始」後、以下が自動で行われます：</p>
+      <ol>
+        <li>LINEアカウントにログイン</li>
+        <li>LINE Creators Marketでスタンプ情報を登録</li>
+        <li>8枚のスタンプ画像をアップロード</li>
+        <li>審査リクエストを提出</li>
+      </ol>
+      <p>すべて完了すると「🎉 審査リクエスト完了！」と表示されます。</p>
+
+      <div class="info-box">
+        💡 処理中はページを閉じないでください。完了するとチャイム音と通知でお知らせします。
+      </div>
+    </section>
+
+    <!-- 8. 登録後の流れ -->
+    <section class="guide-section" id="after">
+      <h2>8. 登録後の流れ</h2>
+
+      <div class="step-box">
+        <div class="step-title">📋 LINEによる審査</div>
+        <p>スタンプはLINEの審査チームによって確認されます。通常<strong>数日〜1週間</strong>ほどかかります。</p>
+      </div>
+
+      <div class="step-box">
+        <div class="step-title">✅ 審査通過 → 販売開始！</div>
+        <p>審査が通ると、LINEスタンプショップでスタンプが購入可能になります。</p>
+      </div>
+
+      <div class="step-box">
+        <div class="step-title">📱 状況確認</div>
+        <p>
+          審査の状況は <a href="https://creator.line.me" target="_blank" style="color:#06C755; font-weight:bold;">LINE Creators Market</a> にログインして確認できます。
+        </p>
+      </div>
+    </section>
+
+    <!-- 9. よくある質問 -->
+    <section class="guide-section" id="faq">
+      <h2>9. よくある質問</h2>
+
+      <details class="faq-item">
+        <summary>スタンプのタイトルや説明はなぜ英語なの？</summary>
+        <p>LINE Creators Marketの仕様で、タイトルと説明は英語での入力が必須です。日本語で入力するとエラーが表示されます。</p>
+      </details>
+
+      <details class="faq-item">
+        <summary>LINEのパスワードを忘れました</summary>
+        <p>LINEアプリ → 設定（⚙️）→ アカウント → パスワード から再設定できます。</p>
+      </details>
+
+      <details class="faq-item">
+        <summary>本人確認の認証番号が届きません</summary>
+        <p>LINEアプリを開くと、本人確認の画面が表示されているはずです。表示されていない場合は、LINEアプリを一度閉じて再度開いてみてください。</p>
+      </details>
+
+      <details class="faq-item">
+        <summary>処理中にエラーが出ました</summary>
+        <p>ページをリロードして最初からやり直してください。写真のアップロードからになります。</p>
+      </details>
+
+      <details class="faq-item">
+        <summary>スマホ以外（パソコン・タブレット）でも使えますか？</summary>
+        <p>はい、パソコンやタブレットのブラウザからも同じURLでご利用いただけます。</p>
+      </details>
+
+      <details class="faq-item">
+        <summary>登録にお金はかかりますか？</summary>
+        <p>このサービスの利用は無料です。LINE Creators Marketへの登録も無料です。</p>
+      </details>
+
+      <details class="faq-item">
+        <summary>LINE Creators Marketに登録したことがないのですが大丈夫ですか？</summary>
+        <p>はい、初めての方でもご利用いただけます。初回は自動でクリエイター登録を行います。メール確認が必要になる場合がありますので、メールをご確認ください。</p>
+      </details>
+
+      <details class="faq-item">
+        <summary>審査にはどのくらいかかりますか？</summary>
+        <p>通常は数日〜1週間程度です。混雑時はもう少しかかる場合があります。</p>
+      </details>
+    </section>
+
+  </div>
+
+  <div class="guide-footer">
+    <a href="/">スタンプを作る →</a>
+  </div>
+</body>
+</html>
