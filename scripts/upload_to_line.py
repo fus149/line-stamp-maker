@@ -255,16 +255,20 @@ def _extract_verification_code(page: Page) -> str:
 def _fill_login_form(page: Page, email: str, password: str, status: UploadStatus) -> bool:
     """access.line.me のログインフォームにメール/パスワードを自動入力してログインする。"""
     try:
+        status.save_screenshot(page, "login_01_before_fill")
+
         # メール入力欄を探す
         email_input = page.locator('input[type="email"], input[name="tid"], input[placeholder*="メール"], input[placeholder*="email" i]').first
         if not email_input.is_visible(timeout=5000):
             status.update("デバッグ", "メール入力欄が見つかりません")
+            status.save_screenshot(page, "login_02_no_email_field")
             return False
 
         # パスワード入力欄を探す
         password_input = page.locator('input[type="password"]').first
         if not password_input.is_visible(timeout=3000):
             status.update("デバッグ", "パスワード入力欄が見つかりません")
+            status.save_screenshot(page, "login_02_no_password_field")
             return False
 
         # 入力
@@ -272,17 +276,20 @@ def _fill_login_form(page: Page, email: str, password: str, status: UploadStatus
         time.sleep(0.5)
         password_input.fill(password)
         time.sleep(0.5)
+        status.save_screenshot(page, "login_02_after_fill")
 
         # ログインボタンをクリック
         login_btn = page.locator('button[type="submit"], button:has-text("ログイン"), button:has-text("Log in")').first
         if login_btn.is_visible(timeout=3000):
             login_btn.click()
             status.update("ログイン", "🔐 ログイン中...", 12)
-            time.sleep(3)
+            time.sleep(5)
             _wait_for_page_ready(page)
+            status.save_screenshot(page, "login_03_after_click")
             return True
         else:
             status.update("デバッグ", "ログインボタンが見つかりません")
+            status.save_screenshot(page, "login_02_no_button")
             return False
     except Exception as e:
         status.update("デバッグ", f"自動ログイン失敗: {e}")
@@ -1025,6 +1032,17 @@ def wait_for_login(page: Page, status: UploadStatus, timeout: int = 300, email: 
             # まだログインページにいる場合（パスワード間違い等）
             current_url = _get_real_url(page)
             if _is_on_login_page(current_url):
+                # ログイン失敗の詳細をデバッグ用に保存
+                status.save_screenshot(page, "login_failed")
+                try:
+                    error_text = page.evaluate("""() => {
+                        const errors = document.querySelectorAll('.MdInputErr, .error, [class*="error"], [class*="alert"]');
+                        return Array.from(errors).map(e => e.textContent.trim()).filter(t => t).join(' | ');
+                    }""")
+                    if error_text:
+                        status.update("デバッグ", f"ログインエラー詳細: {error_text[:100]}")
+                except Exception:
+                    pass
                 status.update("エラー", "❌ ログインに失敗しました。メールアドレスまたはパスワードを確認してください。", 0)
                 return None
     else:
@@ -2858,14 +2876,15 @@ def upload_to_line(
 
         for attempt in range(3):
             _cleanup_browser_locks(data_dir)
-            # Playwright Chromiumを優先（ローカルデータなし = オートフィル漏洩リスクゼロ）
-            try:
-                return p.chromium.launch_persistent_context(**launch_kwargs)
-            except Exception:
-                pass
-            # Playwright Chromiumが使えない場合はシステムChromeにフォールバック
+            # システムChromeを優先（LINEのbot検知を回避するため）
+            # オートフィル漏洩はargsで無効化済み
             try:
                 return p.chromium.launch_persistent_context(channel="chrome", **launch_kwargs)
+            except Exception:
+                pass
+            # システムChromeが使えない場合はPlaywright Chromiumにフォールバック
+            try:
+                return p.chromium.launch_persistent_context(**launch_kwargs)
             except Exception as e:
                 error_msg = str(e)
                 status.update("デバッグ", f"ブラウザ起動試行{attempt+1}/3 失敗: {error_msg[:100]}")
