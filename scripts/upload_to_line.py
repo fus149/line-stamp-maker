@@ -494,11 +494,15 @@ def _handle_creator_registration(page: Page, title: str, status: UploadStatus) -
     except Exception as e:
         status.update("デバッグ", f"事業形態選択: {e}")
 
-    # --- Step 3: 申込者氏名と屋号を入力 ---
+    # --- Step 3: オートフィルされた不要データをクリア & 申込者氏名・屋号を入力 ---
+    # システムChromeのオートフィルが住所等を勝手に入力する場合があるため、
+    # 意図しないフィールドに入った値をクリアする
     creator_name = title if title else "スタンプクリエイター"
     try:
         inputs = page.locator("input[type='text']")
         count = inputs.count()
+        name_filled = False
+        trade_filled = False
         for i in range(count):
             inp = inputs.nth(i)
             try:
@@ -512,24 +516,36 @@ def _handle_creator_registration(page: Page, title: str, status: UploadStatus) -
                     label = page.locator(f"label[for='{inp_id}']")
                     if label.count() > 0:
                         label_text = (label.first.text_content() or "")
+                label_lower = label_text.lower()
+
+                is_name_field = any(kw in name_attr for kw in ["name", "applicant"]) or \
+                    any(kw in label_text for kw in ["氏名", "名前", "申込者"]) or \
+                    any(kw in placeholder for kw in ["氏名", "名前", "name"])
+
+                is_trade_field = any(kw in name_attr for kw in ["trade", "creator"]) or \
+                    any(kw in label_text for kw in ["屋号", "ペンネーム", "クリエイター名"]) or \
+                    any(kw in placeholder for kw in ["屋号", "trade", "クリエイター"])
 
                 # 氏名フィールド
-                if any(kw in name_attr for kw in ["name", "applicant"]) or \
-                   any(kw in label_text for kw in ["氏名", "名前", "申込者"]) or \
-                   any(kw in placeholder for kw in ["氏名", "名前", "name"]):
-                    current_val = inp.input_value()
-                    if not current_val.strip():
-                        inp.fill(creator_name)
-                        status.update("デバッグ", f"氏名入力: {creator_name}")
-
+                if is_name_field and not name_filled:
+                    inp.fill(creator_name)
+                    name_filled = True
+                    status.update("デバッグ", f"氏名入力: {creator_name}")
                 # 屋号フィールド
-                if any(kw in name_attr for kw in ["trade", "creator"]) or \
-                   any(kw in label_text for kw in ["屋号", "ペンネーム", "クリエイター名"]) or \
-                   any(kw in placeholder for kw in ["屋号", "trade", "クリエイター"]):
-                    current_val = inp.input_value()
-                    if not current_val.strip():
-                        inp.fill(creator_name)
-                        status.update("デバッグ", f"屋号入力: {creator_name}")
+                elif is_trade_field and not trade_filled:
+                    inp.fill(creator_name)
+                    trade_filled = True
+                    status.update("デバッグ", f"屋号入力: {creator_name}")
+                else:
+                    # 住所等のフィールドにオートフィルされた値をクリア
+                    is_address_field = any(kw in name_attr for kw in ["address", "city", "street", "zip", "postal", "town", "building"]) or \
+                        any(kw in label_lower for kw in ["住所", "市区町村", "番地", "郵便番号", "建物", "町名", "address", "city", "street"]) or \
+                        any(kw in placeholder for kw in ["住所", "市区町村", "番地", "郵便番号", "address"])
+                    if is_address_field:
+                        current_val = inp.input_value()
+                        if current_val.strip():
+                            inp.fill("")
+                            status.update("デバッグ", f"オートフィル値をクリア: {name_attr or inp_id} (元の値: {current_val[:20]})")
             except Exception:
                 continue
     except Exception as e:
@@ -2751,19 +2767,22 @@ def upload_to_line(
             "args": [
                 "--disable-blink-features=AutomationControlled",  # bot検知回避
                 "--no-sandbox",
+                # オートフィル完全無効化: システムChromeの個人情報（住所等）がフォームに漏洩するのを防止
+                "--disable-features=Autofill,AutofillServerCommunication,AutofillCreditCardAuthentication",
+                "--disable-sync",  # Googleアカウント同期を無効化
             ],
         }
 
         for attempt in range(3):
             _cleanup_browser_locks(data_dir)
-            # システムChromeを優先（ログインセッション互換性のため）
-            try:
-                return p.chromium.launch_persistent_context(channel="chrome", **launch_kwargs)
-            except Exception:
-                pass
-            # Chromeが使えない場合はPlaywright Chromiumにフォールバック
+            # Playwright Chromiumを優先（ローカルデータなし = オートフィル漏洩リスクゼロ）
             try:
                 return p.chromium.launch_persistent_context(**launch_kwargs)
+            except Exception:
+                pass
+            # Playwright Chromiumが使えない場合はシステムChromeにフォールバック
+            try:
+                return p.chromium.launch_persistent_context(channel="chrome", **launch_kwargs)
             except Exception as e:
                 error_msg = str(e)
                 status.update("デバッグ", f"ブラウザ起動試行{attempt+1}/3 失敗: {error_msg[:100]}")
