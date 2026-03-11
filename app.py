@@ -37,6 +37,42 @@ TEMPLATES_PATH = PROJECT_ROOT / "prompts" / "message_templates.json"
 SESSIONS_DIR = PROJECT_ROOT / "sessions"
 SESSIONS_DIR.mkdir(exist_ok=True)
 
+# --- 古いセッションの自動クリーンアップ ---
+# ブラウザデータ（Cookie・ログイン情報）が残り続けないようにする
+SESSION_MAX_AGE_HOURS = 2  # セッションの最大保持時間
+
+def _cleanup_old_sessions():
+    """2時間以上前のセッションディレクトリを自動削除する。"""
+    import time as _time
+    now = _time.time()
+    try:
+        for session_dir in SESSIONS_DIR.iterdir():
+            if not session_dir.is_dir():
+                continue
+            try:
+                # ディレクトリの最終更新時刻で判定
+                mtime = session_dir.stat().st_mtime
+                age_hours = (now - mtime) / 3600
+                if age_hours > SESSION_MAX_AGE_HOURS:
+                    shutil.rmtree(session_dir)
+            except Exception:
+                continue
+    except Exception:
+        pass
+
+def _periodic_cleanup():
+    """定期的に古いセッションをクリーンアップする（30分ごと）。"""
+    import time as _time
+    while True:
+        _time.sleep(1800)  # 30分
+        _cleanup_old_sessions()
+
+# サーバー起動時にも古いセッションをクリーンアップ
+_cleanup_old_sessions()
+# バックグラウンドスレッドで定期実行
+_cleanup_thread = threading.Thread(target=_periodic_cleanup, daemon=True)
+_cleanup_thread.start()
+
 app.mount("/static", StaticFiles(directory=str(PROJECT_ROOT / "static")), name="static")
 
 
@@ -63,6 +99,13 @@ CACHE_BUST = str(int(time.time()))
 
 # 同時LINE登録処理の上限（各処理がヘッドレスChrome1つを使うため）
 _upload_semaphore = threading.Semaphore(3)
+
+
+import re
+
+def _validate_session_id(session_id: str) -> bool:
+    """セッションIDが安全な形式であることを確認（パストラバーサル防止）。"""
+    return bool(re.match(r'^[a-f0-9]{8}$', session_id))
 
 
 def load_templates() -> list[str]:
@@ -334,6 +377,8 @@ async def upload_to_line_api(
 @app.get("/api/qr-code/{session_id}")
 async def get_qr_code(session_id: str):
     """LINEログイン用QRコード画像を返す（スマホ表示用）。"""
+    if not _validate_session_id(session_id):
+        return JSONResponse({"error": "invalid session"}, status_code=400)
     path = SESSIONS_DIR / session_id / "qr_code.png"
     if not path.exists():
         return JSONResponse({"error": "QRコードがまだ準備できていません"}, status_code=404)
@@ -347,6 +392,8 @@ async def get_qr_code(session_id: str):
 @app.get("/api/upload-status/{session_id}")
 async def get_upload_status(session_id: str):
     """LINE自動登録の進捗を返す。"""
+    if not _validate_session_id(session_id):
+        return JSONResponse({"error": "invalid session"}, status_code=400)
     status_file = SESSIONS_DIR / session_id / "upload_status.json"
     if not status_file.exists():
         return {"step": "待機中", "message": "処理を開始しています...", "progress": 0}
@@ -362,6 +409,8 @@ async def get_upload_status(session_id: str):
 @app.get("/api/debug-screenshots/{session_id}")
 async def list_debug_screenshots(session_id: str):
     """デバッグスクリーンショットの一覧を返す。"""
+    if not _validate_session_id(session_id):
+        return JSONResponse({"error": "invalid session"}, status_code=400)
     debug_dir = SESSIONS_DIR / session_id / "output" / "debug"
     if not debug_dir.exists():
         return {"screenshots": []}
@@ -372,6 +421,11 @@ async def list_debug_screenshots(session_id: str):
 @app.get("/api/debug-screenshots/{session_id}/{filename}")
 async def get_debug_screenshot(session_id: str, filename: str):
     """デバッグスクリーンショットを返す。"""
+    if not _validate_session_id(session_id):
+        return JSONResponse({"error": "invalid session"}, status_code=400)
+    # ファイル名のバリデーション（パストラバーサル防止）
+    if "/" in filename or "\\" in filename or ".." in filename:
+        return JSONResponse({"error": "invalid filename"}, status_code=400)
     path = SESSIONS_DIR / session_id / "output" / "debug" / filename
     if not path.exists():
         return JSONResponse({"error": "not found"}, status_code=404)
@@ -380,6 +434,8 @@ async def get_debug_screenshot(session_id: str, filename: str):
 
 @app.delete("/api/session/{session_id}")
 async def cleanup_session(session_id: str):
+    if not _validate_session_id(session_id):
+        return JSONResponse({"error": "invalid session"}, status_code=400)
     session_dir = SESSIONS_DIR / session_id
     if session_dir.exists():
         shutil.rmtree(session_dir)

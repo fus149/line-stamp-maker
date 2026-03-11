@@ -33,11 +33,12 @@ class UploadStatus:
         self.logs: list[str] = []
 
     def update(self, step: str, message: str, progress: int = 0, extra: dict = None):
-        self.logs.append(f"[{step}] {message}")
         print(f"  [{step}] {message}")
         # 「デバッグ」「警告」ステップはターミナルのみ表示（お客様には見せない）
         if step in ("デバッグ", "警告"):
             return
+        # お客様に見せるログのみ蓄積（デバッグ・警告は除外済み）
+        self.logs.append(f"[{step}] {message}")
         if self.status_file:
             data = {
                 "step": step,
@@ -289,6 +290,7 @@ def _fill_login_form(page: Page, email: str, password: str, status: UploadStatus
 
 
 
+def _switch_to_qr_login(page: Page, status: UploadStatus) -> bool:
     """access.line.me のログインページで「QRコードログイン」に切り替える。
     デフォルトはメール/パスワード表示のため、QRコード表示にはクリックが必要。
     """
@@ -367,7 +369,8 @@ def _is_on_creator_site(url: str) -> bool:
 
 def _is_on_creator_signup_page(url: str) -> bool:
     """初回ユーザーのクリエイター登録ページにいるか判定。
-    /signup/line_auth (OAuth入口) と /signup/line_callback (OAuthコールバック) は除外。
+    除外: /signup/line_auth, /signup/line_callback (OAuth関連)
+    除外: /signup/complete, /signup/verify, /signup/confirm (ポスト登録ページ)
     """
     if "creator.line.me" not in url:
         return False
@@ -375,6 +378,9 @@ def _is_on_creator_signup_page(url: str) -> bool:
         return False
     # OAuth関連URLは登録ページではない
     if "/signup/line_auth" in url or "/signup/line_callback" in url:
+        return False
+    # 登録完了・確認系ページは登録フォームではない
+    if any(kw in url for kw in ["/signup/complete", "/signup/verify", "/signup/confirm", "/signup/done"]):
         return False
     return True
 
@@ -483,10 +489,28 @@ def _handle_creator_registration(page: Page, title: str, status: UploadStatus) -
                     if label.count() > 0:
                         label_text = (label.first.text_content() or "").lower()
 
-                if any(kw in name for kw in ["business", "type", "form"]) or \
+                if any(kw in name for kw in ["business", "type"]) or \
                    any(kw in label_text for kw in ["事業形態", "事業", "business"]):
-                    sel.select_option(label="個人")
-                    status.update("デバッグ", "事業形態: 個人を選択")
+                    # 「個人」を部分一致で検索（「個人（日本国内居住者）」等にも対応）
+                    try:
+                        sel.select_option(label="個人")
+                    except Exception:
+                        # 完全一致が失敗したら、option要素を走査して部分一致
+                        options = sel.locator("option")
+                        selected = False
+                        for oi in range(options.count()):
+                            opt_text = options.nth(oi).text_content() or ""
+                            if "個人" in opt_text or "individual" in opt_text.lower():
+                                opt_val = options.nth(oi).get_attribute("value")
+                                if opt_val is not None:
+                                    sel.select_option(value=opt_val)
+                                    selected = True
+                                    status.update("デバッグ", f"事業形態: {opt_text.strip()}")
+                                    break
+                        if not selected:
+                            status.update("デバッグ", "事業形態: 個人オプションが見つかりません")
+                    else:
+                        status.update("デバッグ", "事業形態: 個人を選択")
                     time.sleep(0.5)
                     break
             except Exception:
@@ -494,19 +518,40 @@ def _handle_creator_registration(page: Page, title: str, status: UploadStatus) -
     except Exception as e:
         status.update("デバッグ", f"事業形態選択: {e}")
 
-    # --- Step 3: オートフィルされた不要データをクリア & 申込者氏名・屋号を入力 ---
-    # システムChromeのオートフィルが住所等を勝手に入力する場合があるため、
-    # 意図しないフィールドに入った値をクリアする
-    creator_name = title if title else "スタンプクリエイター"
+    # --- Step 3: 全フィールドのオートフィルをクリア & 申込者氏名・屋号を入力 ---
+    # 安全策: まず全テキスト入力フィールドのオートフィル値をクリアしてから、
+    # 必要なフィールドのみ値を設定する
+    creator_name = title if title else "Creator"
     try:
+        # 3a: 全てのテキスト入力フィールドのオートフィル値を一括クリア
+        all_inputs = page.locator("input[type='text'], input[type='tel'], input[type='email']:not([name*='login'])")
+        total_inputs = all_inputs.count()
+        cleared_count = 0
+        for i in range(total_inputs):
+            inp = all_inputs.nth(i)
+            try:
+                if not inp.is_visible(timeout=500):
+                    continue
+                current_val = inp.input_value()
+                if current_val.strip():
+                    inp.fill("")
+                    cleared_count += 1
+            except Exception:
+                continue
+        if cleared_count > 0:
+            status.update("デバッグ", f"オートフィル値を{cleared_count}フィールドからクリア")
+
+        # 3b: 必要なフィールドに値を入力
         inputs = page.locator("input[type='text']")
         count = inputs.count()
         name_filled = False
         trade_filled = False
+        last_name_filled = False
+        first_name_filled = False
         for i in range(count):
             inp = inputs.nth(i)
             try:
-                if not inp.is_visible(timeout=1000):
+                if not inp.is_visible(timeout=500):
                     continue
                 name_attr = (inp.get_attribute("name") or "").lower()
                 placeholder = (inp.get_attribute("placeholder") or "").lower()
@@ -516,36 +561,44 @@ def _handle_creator_registration(page: Page, title: str, status: UploadStatus) -
                     label = page.locator(f"label[for='{inp_id}']")
                     if label.count() > 0:
                         label_text = (label.first.text_content() or "")
-                label_lower = label_text.lower()
 
+                # 姓フィールド（姓名分割フォーム対応）
+                is_last_name = any(kw in name_attr for kw in ["last_name", "family_name", "surname", "sei"]) or \
+                    any(kw in label_text for kw in ["姓", "ラストネーム"])
+                if is_last_name and not last_name_filled:
+                    inp.fill(creator_name)
+                    last_name_filled = True
+                    status.update("デバッグ", f"姓入力: {creator_name}")
+                    continue
+
+                # 名フィールド（姓名分割フォーム対応）
+                is_first_name = any(kw in name_attr for kw in ["first_name", "given_name", "mei"]) or \
+                    any(kw in label_text for kw in ["名", "ファーストネーム"])
+                if is_first_name and not first_name_filled:
+                    inp.fill(creator_name)
+                    first_name_filled = True
+                    status.update("デバッグ", f"名入力: {creator_name}")
+                    continue
+
+                # 氏名フィールド（単一フィールド）
                 is_name_field = any(kw in name_attr for kw in ["name", "applicant"]) or \
                     any(kw in label_text for kw in ["氏名", "名前", "申込者"]) or \
                     any(kw in placeholder for kw in ["氏名", "名前", "name"])
-
-                is_trade_field = any(kw in name_attr for kw in ["trade", "creator"]) or \
-                    any(kw in label_text for kw in ["屋号", "ペンネーム", "クリエイター名"]) or \
-                    any(kw in placeholder for kw in ["屋号", "trade", "クリエイター"])
-
-                # 氏名フィールド
-                if is_name_field and not name_filled:
+                if is_name_field and not name_filled and not last_name_filled:
                     inp.fill(creator_name)
                     name_filled = True
                     status.update("デバッグ", f"氏名入力: {creator_name}")
+                    continue
+
                 # 屋号フィールド
-                elif is_trade_field and not trade_filled:
+                is_trade_field = any(kw in name_attr for kw in ["trade", "creator"]) or \
+                    any(kw in label_text for kw in ["屋号", "ペンネーム", "クリエイター名"]) or \
+                    any(kw in placeholder for kw in ["屋号", "trade", "クリエイター"])
+                if is_trade_field and not trade_filled:
                     inp.fill(creator_name)
                     trade_filled = True
                     status.update("デバッグ", f"屋号入力: {creator_name}")
-                else:
-                    # 住所等のフィールドにオートフィルされた値をクリア
-                    is_address_field = any(kw in name_attr for kw in ["address", "city", "street", "zip", "postal", "town", "building"]) or \
-                        any(kw in label_lower for kw in ["住所", "市区町村", "番地", "郵便番号", "建物", "町名", "address", "city", "street"]) or \
-                        any(kw in placeholder for kw in ["住所", "市区町村", "番地", "郵便番号", "address"])
-                    if is_address_field:
-                        current_val = inp.input_value()
-                        if current_val.strip():
-                            inp.fill("")
-                            status.update("デバッグ", f"オートフィル値をクリア: {name_attr or inp_id} (元の値: {current_val[:20]})")
+                    continue
             except Exception:
                 continue
     except Exception as e:
@@ -635,10 +688,27 @@ def _handle_creator_registration(page: Page, title: str, status: UploadStatus) -
         status.update("警告", "クリエイター登録フォームの送信ボタンが見つかりませんでした")
         return False
 
+    # 送信後にバリデーションエラーが表示されているか確認
+    try:
+        error_elements = page.locator(".error, .alert-danger, .validation-error, [class*='error'], [class*='Error']")
+        if error_elements.count() > 0:
+            for ei in range(min(error_elements.count(), 3)):
+                err_text = error_elements.nth(ei).text_content() or ""
+                if err_text.strip():
+                    status.update("デバッグ", f"フォームエラー検出: {err_text.strip()[:80]}")
+    except Exception:
+        pass
+
+    # 送信後にまだ同じ登録ページにいるか確認（ダッシュボードに遷移したら成功）
+    post_url = _get_real_url(page)
+    if "/my/" in post_url:
+        status.update("デバッグ", "登録後にダッシュボードへ遷移 — 登録成功")
+        return True
+
     # 送信後の確認ページで追加の確認ボタンがある場合
     try:
-        for confirm_text in ["確認", "OK", "完了", "送信"]:
-            btn = page.get_by_text(confirm_text, exact=True)
+        for confirm_text in ["確認", "OK", "完了", "送信", "登録する", "同意して登録"]:
+            btn = page.get_by_text(confirm_text, exact=False)
             if btn.count() > 0 and btn.first.is_visible(timeout=3000):
                 btn.first.click(force=True)
                 status.update("デバッグ", f"確認ボタン「{confirm_text}」をクリック")
@@ -932,16 +1002,22 @@ def wait_for_login(page: Page, status: UploadStatus, timeout: int = 300, email: 
                         signup_page = _check_all_pages_for_signup()
                         if signup_page:
                             status.update("デバッグ", "本人確認後 → クリエイター登録ページ検出（遷移後）")
-                            _handle_creator_registration(signup_page, title, status)
-                            # ダッシュボード到達を少し待つ
-                            time.sleep(10)
-                            dashboard = _check_all_pages_for_dashboard()
-                            if dashboard:
-                                status.update("ログイン", "✅ クリエイター登録完了！", 20)
-                                return dashboard
-                            if _try_navigate_to_dashboard(signup_page, status):
-                                status.update("ログイン", "✅ クリエイター登録完了！", 20)
-                                return signup_page
+                            if _handle_creator_registration(signup_page, title, status):
+                                # 登録後、ダッシュボード遷移を最大120秒待つ
+                                reg_wait = 0
+                                while reg_wait < 120:
+                                    time.sleep(5)
+                                    reg_wait += 5
+                                    dashboard = _check_all_pages_for_dashboard()
+                                    if dashboard:
+                                        status.update("ログイン", "✅ クリエイター登録完了！", 20)
+                                        return dashboard
+                                    if reg_wait % 30 == 0:
+                                        status.update("クリエイター登録", f"📧 メール確認をお願いします（残り{120 - reg_wait}秒）", 18)
+                                # 最後にダッシュボードへの直接遷移を試行
+                                if _try_navigate_to_dashboard(signup_page, status):
+                                    status.update("ログイン", "✅ クリエイター登録完了！", 20)
+                                    return signup_page
 
                 status.update("エラー", "⏰ 本人確認がタイムアウトしました。もう一度お試しください。", 0)
                 return None
@@ -965,6 +1041,7 @@ def wait_for_login(page: Page, status: UploadStatus, timeout: int = 300, email: 
     elapsed = 0
     interval = 3
     login_detected = False
+    registration_attempted = False  # _handle_creator_registration()の重複呼び出し防止
     pages_empty_count = 0
     last_qr_capture = 0  # 最後のQRキャプチャ時刻（elapsed秒）
     QR_REFRESH_INTERVAL = 30  # QRコード更新間隔（秒）
@@ -1037,7 +1114,9 @@ def wait_for_login(page: Page, status: UploadStatus, timeout: int = 300, email: 
                     if not login_detected:
                         login_detected = True
                         status.update("デバッグ", f"初回ユーザー登録ページ検出: {url[:100]}")
-                    _handle_creator_registration(p, title, status)
+                    if not registration_attempted:
+                        registration_attempted = True
+                        _handle_creator_registration(p, title, status)
                     # 登録後の遷移を待つ（次のポーリングで確認）
                     continue
                 # creator.line.meにいる（ログイン後リダイレクト）がダッシュボードではない
@@ -1893,7 +1972,7 @@ def navigate_to_new_sticker(page: Page, status: UploadStatus, create_url: str = 
 # フォーム入力・画像アップロード
 # ============================================================
 
-def fill_sticker_info(page: Page, title: str, description: str, status: UploadStatus):
+def fill_sticker_info(page: Page, title: str, description: str, status: UploadStatus, creator_name: str = ""):
     """スタンプのタイトル・説明文を入力する。"""
     status.update("自動処理中", "スタンプ情報を入力中...", 40)
     status.save_screenshot(page, "06_before_fill")
@@ -1978,8 +2057,9 @@ def fill_sticker_info(page: Page, title: str, description: str, status: UploadSt
             if "copyright" in name:
                 current_val = inp.input_value()
                 if not current_val.strip():
-                    inp.fill("fus")
-                    status.update("デバッグ", "コピーライト入力: fus")
+                    copyright_val = creator_name if creator_name else title.split()[0] if title else "Creator"
+                    inp.fill(copyright_val)
+                    status.update("デバッグ", f"コピーライト入力: {copyright_val}")
                 else:
                     status.update("デバッグ", f"コピーライト既入力: {current_val}")
                 copyright_filled = True
@@ -2770,6 +2850,9 @@ def upload_to_line(
                 # オートフィル完全無効化: システムChromeの個人情報（住所等）がフォームに漏洩するのを防止
                 "--disable-features=Autofill,AutofillServerCommunication,AutofillCreditCardAuthentication",
                 "--disable-sync",  # Googleアカウント同期を無効化
+                "--disable-extensions",  # システムChromeの拡張機能によるデータ送信を防止
+                "--disable-component-extensions-with-background-pages",
+                "--disable-default-apps",
             ],
         }
 
@@ -2909,7 +2992,7 @@ def upload_to_line(
                 return False
 
             # Step 4: スタンプ情報入力
-            fill_sticker_info(page, title, description, status)
+            fill_sticker_info(page, title, description, status, creator_name=creator_name)
 
             # Step 5: フォーム保存（新規登録フォームを送信→編集ページへ遷移）
             form_saved = submit_creation_form(page, status)
