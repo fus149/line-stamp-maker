@@ -870,15 +870,62 @@ def wait_for_login(page: Page, status: UploadStatus, timeout: int = 300, email: 
                             status.update("ログイン", "✅ 本人確認完了！ログインしました", 20)
                             return creator
 
+                    # 初回ユーザー: signupページに遷移した？
+                    signup_page = _check_all_pages_for_signup()
+                    if signup_page:
+                        status.update("デバッグ", "本人確認完了 → クリエイター登録ページ検出")
+                        if _handle_creator_registration(signup_page, title, status):
+                            # 登録後、ダッシュボード遷移を待つ
+                            reg_wait = 0
+                            while reg_wait < 120:
+                                time.sleep(5)
+                                reg_wait += 5
+                                dashboard = _check_all_pages_for_dashboard()
+                                if dashboard:
+                                    status.update("ログイン", "✅ クリエイター登録完了！", 20)
+                                    return dashboard
+                                current = _get_real_url(signup_page)
+                                if "/my/" in current:
+                                    status.update("ログイン", "✅ クリエイター登録完了！", 20)
+                                    return signup_page
+                                if not _is_on_creator_signup_page(current) and _is_on_creator_site(current):
+                                    if _try_navigate_to_dashboard(signup_page, status):
+                                        status.update("ログイン", "✅ クリエイター登録完了！", 20)
+                                        return signup_page
+                                if reg_wait % 30 == 0:
+                                    remaining = 120 - reg_wait
+                                    status.update("クリエイター登録", f"📧 メールのリンクをクリックして登録を完了してください（残り{remaining}秒）", 17)
+                            if _try_navigate_to_dashboard(signup_page, status):
+                                status.update("ログイン", "✅ クリエイター登録完了！", 20)
+                                return signup_page
+                            status.update("エラー", "⏰ クリエイター登録のメール確認がタイムアウトしました。", 0)
+                            return None
+
                     # まだ本人確認ページにいるか？
-                    if not _is_on_verification_page(page) and not _is_on_login_page(_get_real_url(page)):
+                    current_url = _get_real_url(page)
+                    if not _is_on_verification_page(page) and not _is_on_login_page(current_url):
                         # 別のページに遷移 → ログイン成功の可能性
+                        status.update("デバッグ", f"本人確認後に別ページへ遷移: {current_url[:100]}")
                         time.sleep(3)
                         _wait_for_page_ready(page)
                         dashboard = _check_all_pages_for_dashboard()
                         if dashboard:
                             status.update("ログイン", "✅ ログイン完了！", 20)
                             return dashboard
+                        # signupページの再チェック（ページ遷移後）
+                        signup_page = _check_all_pages_for_signup()
+                        if signup_page:
+                            status.update("デバッグ", "本人確認後 → クリエイター登録ページ検出（遷移後）")
+                            _handle_creator_registration(signup_page, title, status)
+                            # ダッシュボード到達を少し待つ
+                            time.sleep(10)
+                            dashboard = _check_all_pages_for_dashboard()
+                            if dashboard:
+                                status.update("ログイン", "✅ クリエイター登録完了！", 20)
+                                return dashboard
+                            if _try_navigate_to_dashboard(signup_page, status):
+                                status.update("ログイン", "✅ クリエイター登録完了！", 20)
+                                return signup_page
 
                 status.update("エラー", "⏰ 本人確認がタイムアウトしました。もう一度お試しください。", 0)
                 return None
